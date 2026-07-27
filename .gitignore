@@ -1,0 +1,16 @@
+# Build outputs
+/xtunnel
+/dist/
+
+# Go test/build artifacts
+*.test
+*.out
+coverage.*
+
+# Local config and logs
+*.log
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
