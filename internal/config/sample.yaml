@@ -1,10 +1,15 @@
 server:
   listen: ":8443"
   secret_key: "change-me"
+  keep_alive_interval_sec: 10
+  max_idle_timeout_sec: 60
 
 client:
   server_addr: "127.0.0.1:8443"
   secret_key: "change-me"
+  keep_alive_interval_sec: 10
+  max_idle_timeout_sec: 60
+  reconnect_interval_sec: 2
 
 routes:
   - local_port: 8080

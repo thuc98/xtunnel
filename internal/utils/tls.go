@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"math/big"
 	"time"
+
+	"github.com/quic-go/quic-go"
 )
 
 const ALPN = "xtunnel-quic"
@@ -43,5 +45,12 @@ func ClientTLSConfig() *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{ALPN},
+	}
+}
+
+func QUICConfig(keepAliveIntervalSec, maxIdleTimeoutSec int) *quic.Config {
+	return &quic.Config{
+		KeepAlivePeriod: time.Duration(keepAliveIntervalSec) * time.Second,
+		MaxIdleTimeout:  time.Duration(maxIdleTimeoutSec) * time.Second,
 	}
 }

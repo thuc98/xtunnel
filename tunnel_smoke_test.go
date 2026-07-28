@@ -118,6 +118,60 @@ func TestQuicTCPTunnelRejectsInvalidSecret(t *testing.T) {
 	}
 }
 
+func TestQuicReceiverConnectsAfterServerStarts(t *testing.T) {
+	targetAddr, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	serverPort := freePort(t)
+	localPort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, []config.RouteConfig{{
+		LocalPort: localPort,
+		Target:    targetAddr,
+		Protocol:  "tcp",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	conn := dialWithRetry(t, fmt.Sprintf("127.0.0.1:%d", localPort))
+	defer conn.Close()
+
+	server, err := connector.NewQuicConnector(config.ServerConfig{
+		Listen:    fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey: "test-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = server.Serve(ctx)
+	}()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	got := make([]byte, len("echo:ping"))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "echo:ping" {
+		t.Fatalf("unexpected reply %q", string(got))
+	}
+}
+
 func startTCPEchoTarget(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

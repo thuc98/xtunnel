@@ -1,3 +1,5 @@
 server:
   listen: ":8443"
   secret_key: "change-me"
+  keep_alive_interval_sec: 10
+  max_idle_timeout_sec: 60

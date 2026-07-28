@@ -36,7 +36,8 @@ func (c *QuicConnector) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	listener, err := quic.ListenAddr(c.serverConfig.Listen, tlsConfig, nil)
+	quicConfig := utils.QUICConfig(c.serverConfig.KeepAliveIntervalSec, c.serverConfig.MaxIdleTimeoutSec)
+	listener, err := quic.ListenAddr(c.serverConfig.Listen, tlsConfig, quicConfig)
 	if err != nil {
 		return err
 	}
