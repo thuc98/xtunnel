@@ -18,3 +18,10 @@ routes:
   - local_port: 5353
     target: "8.8.8.8:53"
     protocol: "udp"
+
+# Reverse routes: the server listens on remote_port and forwards to target,
+# dialed from the client machine. Only the client needs this config.
+reverse_routes:
+  - remote_port: 9000
+    target: "127.0.0.1:3000"
+    protocol: "tcp"

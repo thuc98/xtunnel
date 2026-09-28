@@ -40,7 +40,7 @@ func main() {
 		}
 		err = c.Serve(ctx)
 	} else {
-		r, createErr := receiver.NewQuicReceiver(cfg.Client, cfg.Routes)
+		r, createErr := receiver.NewQuicReceiver(cfg.Client, cfg.Routes, cfg.ReverseRoutes)
 		if createErr != nil {
 			log.Fatal(createErr)
 		}

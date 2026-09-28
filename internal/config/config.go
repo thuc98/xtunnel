@@ -12,6 +12,8 @@ type Config struct {
 	Server ServerConfig  `yaml:"server"`
 	Client ClientConfig  `yaml:"client"`
 	Routes []RouteConfig `yaml:"routes"`
+	// ReverseRoutes expose a port on the server that forwards to a target reachable from the client.
+	ReverseRoutes []ReverseRouteConfig `yaml:"reverse_routes"`
 }
 
 type ServerConfig struct {
@@ -33,6 +35,12 @@ type RouteConfig struct {
 	LocalPort int    `yaml:"local_port"`
 	Target    string `yaml:"target"`
 	Protocol  string `yaml:"protocol"`
+}
+
+type ReverseRouteConfig struct {
+	RemotePort int    `yaml:"remote_port"`
+	Target     string `yaml:"target"`
+	Protocol   string `yaml:"protocol"`
 }
 
 func Load(path string) (*Config, error) {
@@ -85,6 +93,25 @@ func (c *Config) Validate() error {
 		if route.Protocol != "tcp" && route.Protocol != "udp" {
 			return fmt.Errorf("routes[%d].protocol must be tcp or udp", i)
 		}
+	}
+	seen := make(map[string]bool, len(c.ReverseRoutes))
+	for i := range c.ReverseRoutes {
+		route := &c.ReverseRoutes[i]
+		route.Protocol = strings.ToLower(route.Protocol)
+		if route.RemotePort <= 0 || route.RemotePort > 65535 {
+			return fmt.Errorf("reverse_routes[%d].remote_port must be 1..65535", i)
+		}
+		if route.Target == "" {
+			return fmt.Errorf("reverse_routes[%d].target is required", i)
+		}
+		if route.Protocol != "tcp" && route.Protocol != "udp" {
+			return fmt.Errorf("reverse_routes[%d].protocol must be tcp or udp", i)
+		}
+		key := fmt.Sprintf("%s:%d", route.Protocol, route.RemotePort)
+		if seen[key] {
+			return fmt.Errorf("reverse_routes[%d]: duplicate %s remote_port %d", i, route.Protocol, route.RemotePort)
+		}
+		seen[key] = true
 	}
 	return nil
 }

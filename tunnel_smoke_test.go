@@ -42,7 +42,7 @@ func TestQuicTCPTunnel(t *testing.T) {
 		LocalPort: localPort,
 		Target:    targetAddr,
 		Protocol:  "tcp",
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestQuicTCPTunnelRejectsInvalidSecret(t *testing.T) {
 		LocalPort: localPort,
 		Target:    targetAddr,
 		Protocol:  "tcp",
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestQuicReceiverConnectsAfterServerStarts(t *testing.T) {
 		LocalPort: localPort,
 		Target:    targetAddr,
 		Protocol:  "tcp",
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,4 +229,190 @@ func dialWithRetry(t *testing.T, addr string) net.Conn {
 	}
 	t.Fatalf("dial %s: %v", addr, lastErr)
 	return nil
+}
+
+func startQuicServer(t *testing.T, ctx context.Context, port int, secret string) {
+	t.Helper()
+	server, err := connector.NewQuicConnector(config.ServerConfig{
+		Listen:    fmt.Sprintf("127.0.0.1:%d", port),
+		SecretKey: secret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = server.Serve(ctx)
+	}()
+}
+
+func expectTCPEcho(t *testing.T, addr string) {
+	t.Helper()
+	conn := dialWithRetry(t, addr)
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got := make([]byte, len("echo:ping"))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "echo:ping" {
+		t.Fatalf("unexpected reply %q", string(got))
+	}
+}
+
+func TestQuicReverseTCPTunnel(t *testing.T) {
+	targetAddr, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	serverPort := freePort(t)
+	remotePort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startQuicServer(t, ctx, serverPort, "test-secret")
+	time.Sleep(100 * time.Millisecond)
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, nil, []config.ReverseRouteConfig{{
+		RemotePort: remotePort,
+		Target:     targetAddr,
+		Protocol:   "tcp",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	expectTCPEcho(t, fmt.Sprintf("127.0.0.1:%d", remotePort))
+}
+
+func TestQuicReverseUDPTunnel(t *testing.T) {
+	target, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, addr, err := target.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			_, _ = target.WriteToUDP(append([]byte("echo:"), buf[:n]...), addr)
+		}
+	}()
+
+	serverPort := freePort(t)
+	remotePort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startQuicServer(t, ctx, serverPort, "test-secret")
+	time.Sleep(100 * time.Millisecond)
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, nil, []config.ReverseRouteConfig{{
+		RemotePort: remotePort,
+		Target:     target.LocalAddr().String(),
+		Protocol:   "udp",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Datagrams sent before the bind is established are dropped, so retry.
+	buf := make([]byte, 1024)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _ = conn.Write([]byte("ping"))
+		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		n, err := conn.Read(buf)
+		if err != nil {
+			continue
+		}
+		if string(buf[:n]) != "echo:ping" {
+			t.Fatalf("unexpected reply %q", string(buf[:n]))
+		}
+		return
+	}
+	t.Fatal("no udp reply through reverse tunnel")
+}
+
+func TestQuicReverseRebindsAfterServerRestart(t *testing.T) {
+	targetAddr, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	serverPort := freePort(t)
+	remotePort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverCtx, stopServer := context.WithCancel(ctx)
+	startQuicServer(t, serverCtx, serverPort, "test-secret")
+	time.Sleep(100 * time.Millisecond)
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+		MaxIdleTimeoutSec:    2,
+		KeepAliveIntervalSec: 1,
+	}, nil, []config.ReverseRouteConfig{{
+		RemotePort: remotePort,
+		Target:     targetAddr,
+		Protocol:   "tcp",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	expectTCPEcho(t, fmt.Sprintf("127.0.0.1:%d", remotePort))
+
+	stopServer()
+	time.Sleep(200 * time.Millisecond)
+	startQuicServer(t, ctx, serverPort, "test-secret")
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), 100*time.Millisecond)
+		if err == nil {
+			_, _ = conn.Write([]byte("ping"))
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			got := make([]byte, len("echo:ping"))
+			_, err = io.ReadFull(conn, got)
+			conn.Close()
+			if err == nil && string(got) == "echo:ping" {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("reverse route was not re-bound after server restart")
 }

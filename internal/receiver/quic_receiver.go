@@ -18,28 +18,52 @@ import (
 )
 
 type QuicReceiver struct {
-	clientConfig config.ClientConfig
-	routes       []config.RouteConfig
-	xconn        manager.XConnection
-	mu           sync.RWMutex
-	reconnectMu  sync.Mutex
+	clientConfig  config.ClientConfig
+	routes        []config.RouteConfig
+	reverseRoutes []config.ReverseRouteConfig
+	xconn         manager.XConnection
+	mu            sync.RWMutex
+	reconnectMu   sync.Mutex
 }
 
-func NewQuicReceiver(clientConfig config.ClientConfig, routes []config.RouteConfig) (*QuicReceiver, error) {
+func NewQuicReceiver(clientConfig config.ClientConfig, routes []config.RouteConfig, reverseRoutes []config.ReverseRouteConfig) (*QuicReceiver, error) {
 	if clientConfig.SecretKey == "" {
 		return nil, fmt.Errorf("client secret_key is required")
 	}
-	if len(routes) == 0 {
-		return nil, fmt.Errorf("client requires at least one route")
+	if len(routes) == 0 && len(reverseRoutes) == 0 {
+		return nil, fmt.Errorf("client requires at least one route or reverse route")
 	}
-	return &QuicReceiver{clientConfig: clientConfig, routes: routes}, nil
+	return &QuicReceiver{clientConfig: clientConfig, routes: routes, reverseRoutes: reverseRoutes}, nil
 }
 
 func (r *QuicReceiver) Start(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer r.close()
 
-	client := tunnel.NewClient(r.clientConfig.SecretKey, r.routes, r)
+	client := tunnel.NewClient(r.clientConfig.SecretKey, r.routes, r.reverseRoutes, r)
+	if len(r.reverseRoutes) > 0 {
+		go r.serveReverse(ctx, client)
+	}
 	return client.ServeRoutes(ctx)
+}
+
+// serveReverse keeps a connection to the server open so it can deliver reverse
+// traffic, reconnecting and re-binding whenever the connection is lost.
+func (r *QuicReceiver) serveReverse(ctx context.Context, client *tunnel.Client) {
+	interval := time.Duration(r.clientConfig.ReconnectIntervalSec) * time.Second
+	for {
+		xconn, err := r.connection(ctx)
+		if err != nil {
+			return
+		}
+		err = client.ServeReverse(ctx, xconn, interval)
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("reverse tunnel to %s lost, reconnecting: %v", r.clientConfig.ServerAddr, err)
+		r.dropConnection(xconn)
+	}
 }
 
 func (r *QuicReceiver) connect(ctx context.Context) error {

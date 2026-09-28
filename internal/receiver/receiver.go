@@ -11,5 +11,5 @@ type Receiver interface {
 }
 
 type Factory interface {
-	New(config.ClientConfig, []config.RouteConfig) (Receiver, error)
+	New(config.ClientConfig, []config.RouteConfig, []config.ReverseRouteConfig) (Receiver, error)
 }

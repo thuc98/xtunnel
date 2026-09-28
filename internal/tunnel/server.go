@@ -1,16 +1,18 @@
 package tunnel
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
-	"time"
-
-	"xtunnel/internal/utils"
+	"sync"
 )
 
-type StreamAccepter interface {
+// StreamConn is a multiplexed connection that can open and accept streams in both directions.
+type StreamConn interface {
+	StreamOpener
 	AcceptStream(context.Context) (net.Conn, error)
 	Close() error
 	RemoteAddr() string
@@ -18,13 +20,16 @@ type StreamAccepter interface {
 
 type Server struct {
 	secretKey string
+
+	mu    sync.Mutex
+	binds map[string]io.Closer
 }
 
 func NewServer(secretKey string) *Server {
-	return &Server{secretKey: secretKey}
+	return &Server{secretKey: secretKey, binds: make(map[string]io.Closer)}
 }
 
-func (s *Server) ServeConnection(ctx context.Context, conn StreamAccepter) {
+func (s *Server) ServeConnection(ctx context.Context, conn StreamConn) {
 	defer conn.Close()
 	log.Printf("accepted client %s", conn.RemoteAddr())
 
@@ -36,11 +41,11 @@ func (s *Server) ServeConnection(ctx context.Context, conn StreamAccepter) {
 			}
 			return
 		}
-		go s.HandleStream(streamConn)
+		go s.HandleStream(ctx, conn, streamConn)
 	}
 }
 
-func (s *Server) HandleStream(streamConn net.Conn) {
+func (s *Server) HandleStream(ctx context.Context, conn StreamConn, streamConn net.Conn) {
 	defer streamConn.Close()
 
 	req, reader, err := ReadStreamRequest(streamConn)
@@ -50,102 +55,111 @@ func (s *Server) HandleStream(streamConn net.Conn) {
 	}
 	if req.SecretKey != s.secretKey {
 		log.Printf("reject stream: invalid secret key")
+		if req.Type == StreamTypeBind {
+			_ = WriteBindResponse(streamConn, BindResponse{Error: "invalid secret key"})
+		}
+		return
+	}
+
+	if req.Type == StreamTypeBind {
+		s.handleBind(ctx, conn, req, reader, streamConn)
 		return
 	}
 
 	switch req.Protocol {
 	case ProtocolTCP:
-		s.handleTCP(req.Target, reader, streamConn)
+		relayTCP(req.Target, reader, streamConn)
 	case ProtocolUDP:
-		s.handleUDP(req.Target, reader, streamConn)
+		relayUDP(req.Target, reader, streamConn)
 	default:
 		log.Printf("unsupported protocol %q", req.Protocol)
 	}
 }
 
-func (s *Server) handleTCP(target string, streamReader io.Reader, streamConn net.Conn) {
-	targetConn, err := net.Dial("tcp", target)
+// handleBind listens on req.Port and tunnels accepted traffic back to the client
+// until the bind stream or the client connection is closed.
+func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequest, reader *bufio.Reader, streamConn net.Conn) {
+	key := fmt.Sprintf("%s:%d", req.Protocol, req.Port)
+	listener, err := s.listen(key, req.Protocol, req.Port)
 	if err != nil {
-		log.Printf("dial tcp target %s: %v", target, err)
+		log.Printf("reverse bind %s from %s: %v", key, conn.RemoteAddr(), err)
+		_ = WriteBindResponse(streamConn, BindResponse{Error: err.Error()})
 		return
 	}
-	defer targetConn.Close()
+	defer s.unbind(key, listener)
 
-	utils.PipeBidirectional(
-		&streamConnReader{reader: streamReader, conn: streamConn},
-		&connCloseWriter{Conn: targetConn},
-		0,
-	)
-}
+	if err := WriteBindResponse(streamConn, BindResponse{OK: true}); err != nil {
+		return
+	}
+	log.Printf("reverse %s bound :%d for client %s", req.Protocol, req.Port, conn.RemoteAddr())
 
-func (s *Server) handleUDP(target string, streamReader io.Reader, streamConn net.Conn) {
-	targetConn, err := net.Dial("udp", target)
-	if err != nil {
-		log.Printf("dial udp target %s: %v", target, err)
-		return
-	}
-	defer targetConn.Close()
+	bindCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// The client holds the bind stream open; EOF or a dead connection releases the port.
+	go func() {
+		_, _ = io.Copy(io.Discard, reader)
+		cancel()
+	}()
 
-	packet, err := io.ReadAll(streamReader)
-	if err != nil {
-		log.Printf("read udp packet from stream: %v", err)
-		return
-	}
-	if len(packet) == 0 {
-		return
-	}
-	if _, err := targetConn.Write(packet); err != nil {
-		log.Printf("write udp target %s: %v", target, err)
-		return
-	}
-
-	_ = targetConn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	buf := make([]byte, 64*1024)
-	n, err := targetConn.Read(buf)
-	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return
+	open := func(ctx context.Context) (net.Conn, error) {
+		c, err := conn.OpenStream(ctx)
+		if err != nil {
+			return nil, err
 		}
-		log.Printf("read udp target %s: %v", target, err)
-		return
+		if err := WriteReverseStreamHeader(c, ReverseStreamHeader{Protocol: req.Protocol, Port: req.Port}); err != nil {
+			_ = c.Close()
+			return nil, err
+		}
+		return c, nil
 	}
-	_, _ = streamConn.Write(buf[:n])
-}
 
-type streamConnReader struct {
-	reader io.Reader
-	conn   net.Conn
-}
-
-func (c *streamConnReader) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
-func (c *streamConnReader) Write(p []byte) (int, error) {
-	return c.conn.Write(p)
-}
-
-func (c *streamConnReader) Close() error {
-	return c.conn.Close()
-}
-
-func (c *streamConnReader) CloseWrite() error {
-	if closeWriter, ok := c.conn.(interface{ CloseWrite() error }); ok {
-		return closeWriter.CloseWrite()
+	label := fmt.Sprintf("client %s", conn.RemoteAddr())
+	switch l := listener.(type) {
+	case net.Listener:
+		err = serveTCPListener(bindCtx, l, open, label)
+	case *net.UDPConn:
+		err = serveUDPConn(bindCtx, l, open, label)
 	}
-	return nil
+	if err != nil && bindCtx.Err() == nil {
+		log.Printf("reverse %s :%d closed: %v", req.Protocol, req.Port, err)
+	}
+	log.Printf("reverse %s unbound :%d for client %s", req.Protocol, req.Port, conn.RemoteAddr())
 }
 
-type connCloseWriter struct {
-	net.Conn
+// listen opens the port for a bind, taking it over from a previous bind of the same key
+// (e.g. a stale connection the client has already replaced by reconnecting).
+func (s *Server) listen(key, protocol string, port int) (io.Closer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if old, ok := s.binds[key]; ok {
+		log.Printf("reverse bind %s: replacing previous bind", key)
+		_ = old.Close()
+		delete(s.binds, key)
+	}
+
+	var listener io.Closer
+	var err error
+	switch protocol {
+	case ProtocolTCP:
+		listener, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+	case ProtocolUDP:
+		listener, err = net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", protocol)
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.binds[key] = listener
+	return listener, nil
 }
 
-func (c *connCloseWriter) CloseWrite() error {
-	if c == nil || c.Conn == nil {
-		return nil
+func (s *Server) unbind(key string, listener io.Closer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.binds[key] == listener {
+		delete(s.binds, key)
 	}
-	if tcpConn, ok := c.Conn.(*net.TCPConn); ok {
-		return tcpConn.CloseWrite()
-	}
-	return nil
+	_ = listener.Close()
 }
