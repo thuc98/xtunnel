@@ -107,6 +107,9 @@ func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequ
 			_ = c.Close()
 			return nil, err
 		}
+		if req.Protocol == ProtocolUDP {
+			return newFramedPacketConn(c, c), nil
+		}
 		return c, nil
 	}
 

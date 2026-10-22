@@ -134,24 +134,19 @@ func (c *Client) routeOpener(route config.RouteConfig) (openStreamFunc, string, 
 func (c *Client) routeDialer(route config.RouteConfig) (openStreamFunc, string, error) {
 	if route.VPN == "" {
 		return func(ctx context.Context) (net.Conn, error) {
-			return c.openStream(ctx, route)
+			conn, err := c.openStream(ctx, route)
+			if err != nil || route.Protocol != ProtocolUDP {
+				return conn, err
+			}
+			return newFramedPacketConn(conn, conn), nil
 		}, "", nil
 	}
 	dial, err := c.targetDialer(route.VPN)
 	if err != nil {
 		return nil, "", err
 	}
-	if route.Protocol == ProtocolUDP {
-		return func(ctx context.Context) (net.Conn, error) {
-			conn, err := dial(ctx, "udp", route.Target)
-			if err != nil {
-				return nil, err
-			}
-			return &datagramConn{Conn: conn}, nil
-		}, viaLabel(route.VPN), nil
-	}
 	return func(ctx context.Context) (net.Conn, error) {
-		return dial(ctx, "tcp", route.Target)
+		return dial(ctx, route.Protocol, route.Target)
 	}, viaLabel(route.VPN), nil
 }
 

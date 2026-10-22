@@ -1,17 +1,24 @@
 package tunnel
 
 import (
-	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"xtunnel/internal/utils"
 )
 
-const udpReplyTimeout = 10 * time.Second
+const (
+	maxUDPPacketSize      = 64*1024 - 1
+	udpSessionQueueSize   = 256
+	udpSessionIdleTimeout = 2 * time.Minute
+)
 
 type openStreamFunc func(context.Context) (net.Conn, error)
 
@@ -50,7 +57,10 @@ func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, t
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 
-	buf := make([]byte, 64*1024)
+	var mu sync.Mutex
+	sessions := make(map[string]*udpSession)
+
+	buf := make([]byte, maxUDPPacketSize)
 	for {
 		n, clientAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -60,37 +70,85 @@ func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, t
 			return err
 		}
 		packet := append([]byte(nil), buf[:n]...)
-		go handleUDPPacket(ctx, conn, clientAddr, packet, open, target)
+		key := clientAddr.String()
+
+		mu.Lock()
+		s, ok := sessions[key]
+		if !ok {
+			s = &udpSession{packets: make(chan []byte, udpSessionQueueSize)}
+			sessions[key] = s
+			go func() {
+				s.run(ctx, conn, clientAddr, open, target)
+				mu.Lock()
+				if sessions[key] == s {
+					delete(sessions, key)
+				}
+				mu.Unlock()
+			}()
+		}
+		mu.Unlock()
+
+		select {
+		case s.packets <- packet:
+		default:
+			// queue full: drop, as UDP would
+		}
 	}
 }
 
-func handleUDPPacket(ctx context.Context, localConn *net.UDPConn, clientAddr *net.UDPAddr, packet []byte, open openStreamFunc, target string) {
+// udpSession carries every datagram from one local client address over a
+// single stream, so the remote side keeps one socket (and source port) for the
+// lifetime of the flow. Protocols like QUIC depend on that.
+type udpSession struct {
+	packets chan []byte
+	idle    idleTracker
+}
+
+func (s *udpSession) run(ctx context.Context, localConn *net.UDPConn, clientAddr *net.UDPAddr, open openStreamFunc, target string) {
 	streamConn, err := open(ctx)
 	if err != nil {
 		log.Printf("open udp stream for %s: %v", target, err)
 		return
 	}
 	defer streamConn.Close()
+	s.idle.touch()
 
-	if _, err := streamConn.Write(packet); err != nil {
-		log.Printf("write udp packet to stream: %v", err)
-		return
-	}
-	if cw, ok := streamConn.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		buf := make([]byte, maxUDPPacketSize)
+		for {
+			n, err := streamConn.Read(buf)
+			if err != nil {
+				return
+			}
+			s.idle.touch()
+			if _, err := localConn.WriteToUDP(buf[:n], clientAddr); err != nil {
+				log.Printf("write udp reply to client: %v", err)
+				return
+			}
+		}
+	}()
 
-	_ = streamConn.SetReadDeadline(time.Now().Add(udpReplyTimeout))
-	reply, err := io.ReadAll(streamConn)
-	if err != nil {
-		log.Printf("read udp reply from stream: %v", err)
-		return
-	}
-	if len(reply) == 0 {
-		return
-	}
-	if _, err := localConn.WriteToUDP(reply, clientAddr); err != nil {
-		log.Printf("write udp reply to client: %v", err)
+	ticker := time.NewTicker(udpSessionIdleTimeout / 4)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-readDone:
+			return
+		case packet := <-s.packets:
+			s.idle.touch()
+			if _, err := streamConn.Write(packet); err != nil {
+				log.Printf("write udp packet to stream: %v", err)
+				return
+			}
+		case <-ticker.C:
+			if s.idle.expired(udpSessionIdleTimeout) {
+				return
+			}
+		}
 	}
 }
 
@@ -117,54 +175,122 @@ func relayUDP(dial DialFunc, target string, streamReader io.Reader, streamConn n
 	}
 	defer targetConn.Close()
 
-	packet, err := io.ReadAll(streamReader)
-	if err != nil {
-		log.Printf("read udp packet from stream: %v", err)
-		return
-	}
-	if len(packet) == 0 {
-		return
-	}
-	if _, err := targetConn.Write(packet); err != nil {
-		log.Printf("write udp target %s: %v", target, err)
-		return
-	}
+	stream := newFramedPacketConn(streamReader, streamConn)
+	var idle idleTracker
+	idle.touch()
 
-	_ = targetConn.SetReadDeadline(time.Now().Add(udpReplyTimeout))
-	buf := make([]byte, 64*1024)
-	n, err := targetConn.Read(buf)
-	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return
-		}
-		log.Printf("read udp target %s: %v", target, err)
-		return
-	}
-	_, _ = streamConn.Write(buf[:n])
-}
-
-type datagramConn struct {
-	net.Conn
-	reply *bytes.Reader
-}
-
-func (c *datagramConn) Read(p []byte) (int, error) {
-	if c.reply == nil {
-		buf := make([]byte, 64*1024)
-		n, err := c.Conn.Read(buf)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				err = io.EOF
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		buf := make([]byte, maxUDPPacketSize)
+		for {
+			n, err := stream.Read(buf)
+			if err != nil {
+				return
 			}
-			return 0, err
+			idle.touch()
+			if _, err := targetConn.Write(buf[:n]); err != nil {
+				log.Printf("write udp target %s: %v", target, err)
+				return
+			}
 		}
-		c.reply = bytes.NewReader(buf[:n])
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		buf := make([]byte, maxUDPPacketSize)
+		for {
+			n, err := targetConn.Read(buf)
+			if err != nil {
+				return
+			}
+			idle.touch()
+			if _, err := stream.Write(buf[:n]); err != nil {
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(udpSessionIdleTimeout / 4)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			if idle.expired(udpSessionIdleTimeout) {
+				return
+			}
+		}
 	}
-	return c.reply.Read(p)
 }
 
-func (c *datagramConn) CloseWrite() error {
-	return nil
+type idleTracker struct {
+	last atomic.Int64
+}
+
+func (t *idleTracker) touch() {
+	t.last.Store(time.Now().UnixNano())
+}
+
+func (t *idleTracker) expired(timeout time.Duration) bool {
+	return time.Since(time.Unix(0, t.last.Load())) > timeout
+}
+
+// framedPacketConn carries datagrams over a byte stream, each prefixed with a
+// 2-byte big-endian length. Every Read returns exactly one datagram and every
+// Write sends exactly one.
+type framedPacketConn struct {
+	net.Conn
+	reader io.Reader
+	header [2]byte
+	wmu    sync.Mutex
+}
+
+func newFramedPacketConn(reader io.Reader, conn net.Conn) *framedPacketConn {
+	return &framedPacketConn{Conn: conn, reader: reader}
+}
+
+func (c *framedPacketConn) Read(p []byte) (int, error) {
+	if _, err := io.ReadFull(c.reader, c.header[:]); err != nil {
+		return 0, err
+	}
+	size := int(binary.BigEndian.Uint16(c.header[:]))
+	if size <= len(p) {
+		if _, err := io.ReadFull(c.reader, p[:size]); err != nil {
+			return 0, unexpectedEOF(err)
+		}
+		return size, nil
+	}
+	if _, err := io.ReadFull(c.reader, p); err != nil {
+		return 0, unexpectedEOF(err)
+	}
+	if _, err := io.CopyN(io.Discard, c.reader, int64(size-len(p))); err != nil {
+		return 0, unexpectedEOF(err)
+	}
+	return len(p), nil
+}
+
+func (c *framedPacketConn) Write(p []byte) (int, error) {
+	if len(p) > maxUDPPacketSize {
+		return 0, fmt.Errorf("udp packet too large: %d bytes", len(p))
+	}
+	frame := make([]byte, 2+len(p))
+	binary.BigEndian.PutUint16(frame, uint16(len(p)))
+	copy(frame[2:], p)
+
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if _, err := c.Conn.Write(frame); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func unexpectedEOF(err error) error {
+	if err == io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 type streamConnReader struct {
