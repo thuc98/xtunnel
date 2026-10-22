@@ -18,6 +18,7 @@ import (
 	"xtunnel/internal/config"
 	"xtunnel/internal/connector"
 	"xtunnel/internal/fortivpn"
+	"xtunnel/internal/metrics"
 	"xtunnel/internal/otp"
 	"xtunnel/internal/receiver"
 	"xtunnel/internal/socks5"
@@ -219,7 +220,7 @@ func (a *App) apply(cfg *config.Config) {
 			v.socks.stop()
 			v.socks = nil
 			if vc.Socks5.Active() {
-				v.socks = a.startSocks("fortivpn "+vc.Name, vc.Socks5, v.sup.DialContext)
+				v.socks = a.startSocks("fortivpn "+vc.Name, metrics.SocksKey("vpn", vc.Name), vc.Socks5, v.sup.DialContext)
 			}
 		}
 		v.cfg = vc
@@ -273,8 +274,8 @@ func (a *App) vpnDial(name string) tunnel.DialFunc {
 	}
 }
 
-func (a *App) startSocks(name string, sc config.Socks5Config, dial socks5.DialFunc) *runner {
-	proxy := &socks5.Server{Name: name, Dial: dial, Username: sc.Username, Password: sc.Password}
+func (a *App) startSocks(name, statsKey string, sc config.Socks5Config, dial socks5.DialFunc) *runner {
+	proxy := &socks5.Server{Name: name, Dial: dial, Username: sc.Username, Password: sc.Password, Stats: metrics.Get(statsKey)}
 	return start(a.ctx, func(ctx context.Context) {
 		if err := proxy.ListenAndServe(ctx, sc.Listen); err != nil {
 			log.Printf("socks5 %s: %v", name, err)
@@ -300,6 +301,7 @@ func (a *App) applyTunnels(cfg *config.Config) {
 	reverse := map[string][]config.ReverseRouteConfig{}
 	var vpnRoutes []config.RouteConfig
 	for _, r := range cfg.Routes {
+		r.Note = ""
 		if r.FortiVPN != "" {
 			vpnRoutes = append(vpnRoutes, r)
 		} else {
@@ -307,6 +309,7 @@ func (a *App) applyTunnels(cfg *config.Config) {
 		}
 	}
 	for _, r := range cfg.ReverseRoutes {
+		r.Note = ""
 		reverse[r.Tunnel] = append(reverse[r.Tunnel], r)
 	}
 
@@ -333,7 +336,7 @@ func (a *App) applyTunnels(cfg *config.Config) {
 				delete(a.tunnelSocks, tc.Name)
 			}
 			if tc.Socks5.Active() {
-				a.tunnelSocks[tc.Name] = &socksRun{cfg: tc.Socks5, run: a.startSocks("tunnel "+tc.Name, tc.Socks5, a.tunnelDial(tc.Name))}
+				a.tunnelSocks[tc.Name] = &socksRun{cfg: tc.Socks5, run: a.startSocks("tunnel "+tc.Name, metrics.SocksKey("tunnel", tc.Name), tc.Socks5, a.tunnelDial(tc.Name))}
 			}
 		}
 	}
@@ -388,6 +391,7 @@ func (a *App) startTunnel(tc config.TunnelConfig, routes []config.RouteConfig, r
 		return t
 	}
 	r.SetVPNDialers(a.vpnDialers(a.cfg))
+	r.SetName(tc.Name)
 	t.receiver = r
 	t.run = start(a.ctx, func(ctx context.Context) {
 		if err := r.Start(ctx); err != nil && ctx.Err() == nil {
@@ -643,4 +647,73 @@ func (a *App) write(data []byte) error {
 		}
 	}()
 	return nil
+}
+
+type Flow struct {
+	Kind    string `json:"kind"`
+	Listen  string `json:"listen"`
+	Through string `json:"through"`
+	Target  string `json:"target"`
+	Note    string `json:"note"`
+	metrics.Snapshot
+}
+
+type Metrics struct {
+	Time    time.Time                   `json:"time"`
+	Total   metrics.Snapshot            `json:"total"`
+	Flows   []Flow                      `json:"flows"`
+	Tunnels map[string]metrics.Snapshot `json:"tunnels"`
+	VPNs    map[string]metrics.Snapshot `json:"vpns"`
+}
+
+// Metrics reports cumulative counters since start; the dashboard turns them into rates.
+func (a *App) Metrics() Metrics {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+
+	m := Metrics{Time: time.Now(), Flows: []Flow{}, Tunnels: map[string]metrics.Snapshot{}, VPNs: map[string]metrics.Snapshot{}}
+	add := func(f Flow, tunnel string) {
+		m.Flows = append(m.Flows, f)
+		m.Total = m.Total.Add(f.Snapshot)
+		if tunnel != "" {
+			m.Tunnels[tunnel] = m.Tunnels[tunnel].Add(f.Snapshot)
+		}
+	}
+	for _, t := range cfg.Tunnels {
+		m.Tunnels[t.Name] = metrics.Snapshot{}
+	}
+	for _, r := range cfg.Routes {
+		f := Flow{Kind: "route", Listen: fmt.Sprintf(":%d/%s", r.LocalPort, r.Protocol), Target: r.Target, Note: r.Note,
+			Snapshot: metrics.Lookup(metrics.RouteKey(r.Protocol, r.LocalPort))}
+		tunnel := ""
+		if r.FortiVPN != "" {
+			f.Through = "vpn " + r.FortiVPN
+		} else {
+			f.Through, tunnel = "tunnel "+r.Tunnel, r.Tunnel
+		}
+		add(f, tunnel)
+	}
+	for _, r := range cfg.ReverseRoutes {
+		f := Flow{Kind: "reverse", Listen: fmt.Sprintf("server:%d/%s", r.RemotePort, r.Protocol), Target: r.Target, Note: r.Note,
+			Through: "tunnel " + r.Tunnel, Snapshot: metrics.Lookup(metrics.ReverseKey(r.Tunnel, r.Protocol, r.RemotePort))}
+		if r.FortiVPN != "" {
+			f.Through += " → vpn " + r.FortiVPN
+		}
+		add(f, r.Tunnel)
+	}
+	for _, t := range cfg.Tunnels {
+		if t.Socks5.Listen != "" {
+			add(Flow{Kind: "socks5", Listen: t.Socks5.Listen, Through: "tunnel " + t.Name, Target: "any",
+				Snapshot: metrics.Lookup(metrics.SocksKey("tunnel", t.Name))}, t.Name)
+		}
+	}
+	for _, v := range cfg.FortiVPNs {
+		m.VPNs[v.Name] = metrics.Lookup(metrics.VPNKey(v.Name))
+		if v.Socks5.Listen != "" {
+			add(Flow{Kind: "socks5", Listen: v.Socks5.Listen, Through: "vpn " + v.Name, Target: "any",
+				Snapshot: metrics.Lookup(metrics.SocksKey("vpn", v.Name))}, "")
+		}
+	}
+	return m
 }

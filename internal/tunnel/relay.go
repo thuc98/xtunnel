@@ -199,8 +199,8 @@ func (c *connCloseWriter) CloseWrite() error {
 	if c == nil || c.Conn == nil {
 		return nil
 	}
-	if tcpConn, ok := c.Conn.(*net.TCPConn); ok {
-		return tcpConn.CloseWrite()
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
 	}
 	return nil
 }

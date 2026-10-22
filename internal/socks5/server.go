@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"xtunnel/internal/metrics"
 	"xtunnel/internal/utils"
 )
 
@@ -43,6 +44,7 @@ type Server struct {
 	Dial     DialFunc
 	Username string
 	Password string
+	Stats    *metrics.Stats
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
@@ -89,6 +91,9 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		log.Printf("socks5 %s connect %s: %v", s.Name, target, err)
 		_ = writeReply(conn, repHostUnreachable)
 		return
+	}
+	if s.Stats != nil {
+		remote = s.Stats.Wrap(remote)
 	}
 	defer remote.Close()
 	if err := writeReply(conn, repSucceeded); err != nil {

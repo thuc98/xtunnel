@@ -59,6 +59,7 @@ type RouteConfig struct {
 	Tunnel string `yaml:"tunnel,omitempty" json:"tunnel"`
 
 	FortiVPN string `yaml:"fortivpn,omitempty" json:"fortivpn"`
+	Note     string `yaml:"note,omitempty" json:"note"`
 }
 
 type ReverseRouteConfig struct {
@@ -69,6 +70,7 @@ type ReverseRouteConfig struct {
 	Tunnel string `yaml:"tunnel,omitempty" json:"tunnel"`
 
 	FortiVPN string `yaml:"fortivpn,omitempty" json:"fortivpn"`
+	Note     string `yaml:"note,omitempty" json:"note"`
 }
 
 type FortiVPNConfig struct {

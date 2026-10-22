@@ -152,6 +152,38 @@ routes:
 	if len(st.Tunnels) != 2 || st.Tunnels[0].State != "up" || st.Tunnels[1].State != "disabled" {
 		t.Fatalf("tunnels status = %+v", st.Tunnels)
 	}
+
+	m := a.Metrics()
+	var routeA Flow
+	for _, f := range m.Flows {
+		if f.Listen == fmt.Sprintf(":%d/tcp", localA) {
+			routeA = f
+		}
+	}
+	if routeA.Total == 0 || routeA.Down < 2 || routeA.Through != "tunnel a" {
+		t.Fatalf("route a metrics = %+v", routeA)
+	}
+	if m.Tunnels["a"].Total < routeA.Total || m.Total.Down < routeA.Down {
+		t.Fatalf("tunnel/total metrics do not include route a: %+v", m)
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if a.Metrics().Tunnels["a"].Active == 0 {
+			break
+		}
+	}
+	if act := a.Metrics().Tunnels["a"].Active; act != 0 {
+		t.Fatalf("active connections after close = %d", act)
+	}
+
+	noted := write(true)
+	noted.Routes[0].Note = "dev kafka"
+	a.apply(noted)
+	a.mu.Lock()
+	same = a.tunnels["a"] == tunnelA
+	a.mu.Unlock()
+	if !same {
+		t.Fatal("changing a route note restarted the tunnel")
+	}
 }
 
 func socksTag(proxy, target string) (string, error) {
@@ -250,6 +282,16 @@ func TestTunnelSocksToggle(t *testing.T) {
 	a.mu.Unlock()
 	if !same {
 		t.Fatal("turning the socks5 proxy on restarted the tunnel")
+	}
+
+	var socks Flow
+	for _, f := range a.Metrics().Flows {
+		if f.Kind == "socks5" {
+			socks = f
+		}
+	}
+	if socks.Total == 0 || socks.Down < 2 || socks.Through != "tunnel a" {
+		t.Fatalf("socks5 metrics = %+v", socks)
 	}
 
 	a.apply(cfgWith(true))

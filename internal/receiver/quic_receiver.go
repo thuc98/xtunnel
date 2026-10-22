@@ -22,6 +22,7 @@ type QuicReceiver struct {
 	routes        []config.RouteConfig
 	reverseRoutes []config.ReverseRouteConfig
 	vpnDialers    map[string]tunnel.DialFunc
+	name          string
 	xconn         manager.XConnection
 	mu            sync.RWMutex
 	reconnectMu   sync.Mutex
@@ -32,6 +33,10 @@ func NewQuicReceiver(clientConfig config.ClientConfig, routes []config.RouteConf
 		return nil, fmt.Errorf("client secret_key is required")
 	}
 	return &QuicReceiver{clientConfig: clientConfig, routes: routes, reverseRoutes: reverseRoutes}, nil
+}
+
+func (r *QuicReceiver) SetName(name string) {
+	r.name = name
 }
 
 func (r *QuicReceiver) SetVPNDialers(dialers map[string]tunnel.DialFunc) {
@@ -55,6 +60,7 @@ func (r *QuicReceiver) Start(ctx context.Context) error {
 
 	client := tunnel.NewClient(r.clientConfig.SecretKey, r.routes, r.reverseRoutes, r)
 	client.SetVPNDialers(r.vpnDialers)
+	client.SetName(r.name)
 	if len(r.reverseRoutes) > 0 {
 		go r.serveReverse(ctx, client)
 	}

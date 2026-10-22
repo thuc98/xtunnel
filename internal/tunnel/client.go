@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xtunnel/internal/config"
+	"xtunnel/internal/metrics"
 )
 
 type StreamOpener interface {
@@ -24,6 +25,11 @@ type Client struct {
 	reverseRoutes map[string]config.ReverseRouteConfig
 	opener        StreamOpener
 	vpnDialers    map[string]DialFunc
+	name          string
+}
+
+func (c *Client) SetName(name string) {
+	c.name = name
 }
 
 func NewClient(secretKey string, routes []config.RouteConfig, reverseRoutes []config.ReverseRouteConfig, opener StreamOpener) *Client {
@@ -111,6 +117,21 @@ func (c *Client) Dial(ctx context.Context, network, address string) (net.Conn, e
 }
 
 func (c *Client) routeOpener(route config.RouteConfig) (openStreamFunc, string, error) {
+	open, via, err := c.routeDialer(route)
+	if err != nil {
+		return nil, "", err
+	}
+	stats := metrics.Get(metrics.RouteKey(route.Protocol, route.LocalPort))
+	return func(ctx context.Context) (net.Conn, error) {
+		conn, err := open(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return stats.Wrap(conn), nil
+	}, via, nil
+}
+
+func (c *Client) routeDialer(route config.RouteConfig) (openStreamFunc, string, error) {
 	if route.FortiVPN == "" {
 		return func(ctx context.Context) (net.Conn, error) {
 			return c.openStream(ctx, route)
@@ -263,6 +284,15 @@ func (c *Client) handleReverseStream(streamConn net.Conn) {
 	if err != nil {
 		log.Printf("reverse %s route server:%d -> %s: %v", route.Protocol, route.RemotePort, route.Target, err)
 		return
+	}
+	stats := metrics.Get(metrics.ReverseKey(c.name, route.Protocol, route.RemotePort))
+	inner := dial
+	dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := inner(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return stats.Wrap(conn), nil
 	}
 	switch route.Protocol {
 	case ProtocolTCP:

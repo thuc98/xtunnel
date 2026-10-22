@@ -9,12 +9,14 @@
   --bg: #f5f6f8; --panel: #ffffff; --text: #1d2129; --muted: #667085; --line: #e3e6eb;
   --accent: #2463eb; --accent-text: #ffffff; --ok: #16803c; --warn: #b45309; --bad: #c62828;
   --ok-bg: #e7f6ec; --warn-bg: #fdf3e2; --bad-bg: #fdeaea; --input: #ffffff; --code: #f0f2f5;
+  --series-1: #2a78d6; --series-2: #eb6834; --grid: #ebedf0; --axis: #c3c2b7;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #111317; --panel: #1a1d23; --text: #e6e8eb; --muted: #98a1ae; --line: #2c3139;
     --accent: #5b8cff; --accent-text: #0b0d10; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
     --ok-bg: #16301f; --warn-bg: #33270f; --bad-bg: #3a1718; --input: #14171c; --code: #14171c;
+    --series-1: #3987e5; --series-2: #d95926; --grid: #262a31; --axis: #383d46;
   }
 }
 * { box-sizing: border-box; }
@@ -64,6 +66,23 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-siz
 .card h3 { margin: 0 0 6px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .kv { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .kv b { color: var(--text); font-weight: 500; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--muted); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.chart-wrap { position: relative; }
+.chart-wrap svg { display: block; width: 100%; height: 240px; }
+.chart-wrap .axis-label { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 16px; align-items: center; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.legend .key { display: inline-block; width: 14px; height: 2px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.tooltip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); white-space: nowrap; display: none; z-index: 3; }
+.tooltip .t { color: var(--muted); margin-bottom: 4px; }
+.tooltip .r { display: flex; align-items: center; gap: 6px; }
+.tooltip .r b { font-variant-numeric: tabular-nums; }
+.tooltip .r span.n { color: var(--muted); }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.spark { display: block; width: 90px; height: 24px; }
 .otp { border: 2px solid var(--warn); background: var(--warn-bg); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
 .otp input { font-size: 20px; letter-spacing: 3px; max-width: 220px; }
 .vpn-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
@@ -78,7 +97,7 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-siz
 .banner.ok { background: var(--ok-bg); color: var(--ok); }
 .empty { color: var(--muted); padding: 10px 6px; }
 .scroll { overflow-x: auto; }
-.scroll table { min-width: 620px; }
+.scroll table { min-width: 820px; }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 @media (max-width: 640px) { header { padding: 10px 16px; } nav { margin-left: 0; width: 100%; } }
 </style>
@@ -93,6 +112,7 @@ code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size:
     <button data-tab="reverse">Reverse routes</button>
     <button data-tab="tunnels">Tunnels</button>
     <button data-tab="vpns">VPNs</button>
+    <button data-tab="monitor">Monitor</button>
     <button data-tab="settings">Settings</button>
     <button data-tab="yaml">YAML</button>
     <button id="logout" hidden>Log out</button>
@@ -329,10 +349,10 @@ function routesSummary() {
   const rows = [];
   const only = S.cfg.tunnels.length === 1 ? S.cfg.tunnels[0].name : "";
   const tun = (name) => "tunnel " + esc(name || only || "?");
-  for (const r of S.cfg.routes) rows.push(`<tr><td>route</td><td><code>localhost:${esc(r.local_port)}</code> ${esc(r.protocol)}</td><td>${r.fortivpn ? "VPN " + esc(r.fortivpn) : tun(r.tunnel)}</td><td><code>${esc(r.target)}</code></td></tr>`);
-  for (const r of S.cfg.reverse_routes) rows.push(`<tr><td>reverse</td><td><code>server:${esc(r.remote_port)}</code> ${esc(r.protocol)}</td><td>${tun(r.tunnel)} → client${r.fortivpn ? " → VPN " + esc(r.fortivpn) : ""}</td><td><code>${esc(r.target)}</code></td></tr>`);
+  for (const r of S.cfg.routes) rows.push(`<tr><td>route</td><td><code>localhost:${esc(r.local_port)}</code> ${esc(r.protocol)}</td><td>${r.fortivpn ? "VPN " + esc(r.fortivpn) : tun(r.tunnel)}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
+  for (const r of S.cfg.reverse_routes) rows.push(`<tr><td>reverse</td><td><code>server:${esc(r.remote_port)}</code> ${esc(r.protocol)}</td><td>${tun(r.tunnel)} → client${r.fortivpn ? " → VPN " + esc(r.fortivpn) : ""}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
   if (!rows.length) return `<div class="empty">No routes yet.</div>`;
-  return `<table><thead><tr><th>Type</th><th>Listen</th><th>Through</th><th>Target</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  return `<table><thead><tr><th>Type</th><th>Listen</th><th>Through</th><th>Target</th><th>Note</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
 function updateOverview() {
@@ -412,14 +432,15 @@ function renderRoutes() {
       <td style="width:90px">${protoSelect(`routes.${i}.protocol`)}</td>
       <td><input data-path="routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
       <td style="width:220px">${viaSelect(i)}</td>
+      <td><input data-path="routes.${i}.note" value="${esc(r.note)}" placeholder="What is it?"></td>
       <td style="width:44px"><button class="btn icon danger" data-del="routes.${i}" title="Delete">✕</button></td>
     </tr>`).join("");
   return `
   <section class="panel">
     <h2>Routes</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Local port</th><th>Protocol</th><th>Target</th><th>Through</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5" class="empty">No routes.</td></tr>`}</tbody>
+      <thead><tr><th>Local port</th><th>Protocol</th><th>Target</th><th>Through</th><th>Note</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" class="empty">No routes.</td></tr>`}</tbody>
     </table></div>
     <div class="row" style="margin-top:10px"><button class="btn" data-add="routes">+ Add route</button></div>
   </section>`;
@@ -433,14 +454,15 @@ function renderReverse() {
       <td><input data-path="reverse_routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
       <td style="width:200px">${tunnelSelect(`reverse_routes.${i}.tunnel`)}</td>
       <td style="width:200px">${vpnSelect(`reverse_routes.${i}.fortivpn`, "Direct from this machine")}</td>
+      <td><input data-path="reverse_routes.${i}.note" value="${esc(r.note)}" placeholder="What is it?"></td>
       <td style="width:44px"><button class="btn icon danger" data-del="reverse_routes.${i}" title="Delete">✕</button></td>
     </tr>`).join("");
   return `
   <section class="panel">
     <h2>Reverse routes</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Server port</th><th>Protocol</th><th>Target</th><th>Server (tunnel)</th><th>Target through</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="6" class="empty">No reverse routes.</td></tr>`}</tbody>
+      <thead><tr><th>Server port</th><th>Protocol</th><th>Target</th><th>Server (tunnel)</th><th>Target through</th><th>Note</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7" class="empty">No reverse routes.</td></tr>`}</tbody>
     </table></div>
     <div class="row" style="margin-top:10px"><button class="btn" data-add="reverse_routes">+ Add reverse route</button></div>
   </section>`;
@@ -560,7 +582,7 @@ function renderYAML() {
   </section>`;
 }
 
-const views = { overview: renderOverview, routes: renderRoutes, reverse: renderReverse, tunnels: renderTunnels, vpns: renderVPNs, settings: renderSettings, yaml: renderYAML };
+const views = { monitor: renderMonitor, overview: renderOverview, routes: renderRoutes, reverse: renderReverse, tunnels: renderTunnels, vpns: renderVPNs, settings: renderSettings, yaml: renderYAML };
 
 function render() {
   if (!S.cfg) return;
@@ -569,6 +591,7 @@ function render() {
   $("#view").innerHTML = views[S.tab]();
   updateOverview();
   updateVPNChips();
+  if (S.tab === "monitor") updateMonitor();
 }
 
 document.addEventListener("click", async (e) => {
@@ -576,12 +599,12 @@ document.addEventListener("click", async (e) => {
   if (!t) return;
   if (t.dataset.tab) {
 
-    S.tab = t.dataset.tab; render(); return;
+    S.tab = t.dataset.tab; history.replaceState(null, "", "#" + S.tab); render(); return;
   }
   if (t.dataset.add) {
     const list = S.cfg[t.dataset.add];
-    if (t.dataset.add === "routes") list.push({ local_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "" });
-    if (t.dataset.add === "reverse_routes") list.push({ remote_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "" });
+    if (t.dataset.add === "routes") list.push({ local_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "", note: "" });
+    if (t.dataset.add === "reverse_routes") list.push({ remote_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "", note: "" });
     if (t.dataset.add === "tunnels") list.push({ name: "tunnel" + (list.length + 1), server_addr: "", secret_key: "", socks5: {} });
     if (t.dataset.add === "fortivpns") list.push({ name: "vpn" + (list.length + 1), host: "", port: 443, username: "", password: "", socks5: {} });
     setDirty(true); render(); return;
@@ -629,6 +652,187 @@ async function saveYAML() {
   } catch (err) { banner("err", err.message); }
 }
 
+const HISTORY = 151;
+const M = { samples: [] };
+
+function fmtRate(b) { return fmtBytes(b) + "/s"; }
+function fmtBytes(b) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? Math.round(b) : b.toFixed(b < 10 ? 1 : 0)) + " " + u[i];
+}
+const flowKey = (f) => `${f.kind}|${f.listen}|${f.through}`;
+
+async function pollMetrics() {
+  try {
+    const m = await api("GET", "/api/metrics");
+    const t = new Date(m.time).getTime();
+    const prev = M.samples[M.samples.length - 1];
+    const sample = { t, raw: m, rate: { down: 0, up: 0 }, flows: {}, tunnels: {}, vpns: {} };
+    const rate = (cur, old, dt) => {
+      if (!old || dt <= 0) return { down: 0, up: 0 };
+      return { down: Math.max(0, cur.down - old.down) / dt, up: Math.max(0, cur.up - old.up) / dt };
+    };
+    const dt = prev ? (t - prev.t) / 1000 : 0;
+    sample.rate = rate(m.total, prev && prev.raw.total, dt);
+    for (const f of m.flows) {
+      const old = prev && prev.raw.flows.find((x) => flowKey(x) === flowKey(f));
+      sample.flows[flowKey(f)] = rate(f, old, dt);
+    }
+    for (const [k, v] of Object.entries(m.tunnels)) sample.tunnels[k] = rate(v, prev && prev.raw.tunnels[k], dt);
+    for (const [k, v] of Object.entries(m.vpns)) sample.vpns[k] = rate(v, prev && prev.raw.vpns[k], dt);
+    M.samples.push(sample);
+    if (M.samples.length > HISTORY) M.samples.shift();
+    if (S.tab === "monitor") updateMonitor();
+  } catch {}
+}
+
+function renderMonitor() {
+  return `
+  <div class="tiles" id="tiles"></div>
+  <section class="panel">
+    <h2>Throughput, last 5 minutes</h2>
+    <div class="legend"><span><span class="key" style="background:var(--series-1)"></span>Download</span><span><span class="key" style="background:var(--series-2)"></span>Upload</span></div>
+    <div class="chart-wrap" id="chart"><svg id="chart-svg" role="img" aria-label="Download and upload throughput over the last 5 minutes"></svg><div class="tooltip" id="tooltip"></div></div>
+  </section>
+  <section class="panel">
+    <h2>Routes &amp; proxies</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Type</th><th>Listen</th><th>Through</th><th>Target</th><th>Note</th><th class="num">Open</th><th class="num">Conns</th><th class="num">↓ now</th><th class="num">↑ now</th><th class="num">Total</th><th>Trend</th></tr></thead>
+      <tbody id="flows"></tbody>
+    </table></div>
+  </section>
+  <section class="panel">
+    <h2>Tunnels &amp; VPNs</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Name</th><th class="num">Open</th><th class="num">Conns</th><th class="num">↓ now</th><th class="num">↑ now</th><th class="num">Total</th></tr></thead>
+      <tbody id="links"></tbody>
+    </table></div>
+  </section>`;
+}
+
+function updateMonitor() {
+  if (!$("#tiles")) return;
+  const last = M.samples[M.samples.length - 1];
+  if (!last) return;
+  const m = last.raw;
+  $("#tiles").innerHTML = [
+    ["Download", fmtRate(last.rate.down), `${fmtBytes(m.total.down)} since start`],
+    ["Upload", fmtRate(last.rate.up), `${fmtBytes(m.total.up)} since start`],
+    ["Open connections", String(m.total.active), `${m.total.total} since start`],
+    ["Transferred", fmtBytes(m.total.down + m.total.up), "download + upload"],
+  ].map(([l, v, sub]) => `<div class="tile"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(sub)}</div></div>`).join("");
+
+  $("#flows").innerHTML = m.flows.length ? m.flows.map((f) => {
+    const r = last.flows[flowKey(f)] || { down: 0, up: 0 };
+    return `<tr><td>${esc(f.kind)}</td><td><code>${esc(f.listen)}</code></td><td>${esc(f.through)}</td><td><code>${esc(f.target)}</code></td><td>${esc(f.note)}</td>
+      <td class="num">${f.active}</td><td class="num">${f.total}</td><td class="num">${esc(fmtRate(r.down))}</td><td class="num">${esc(fmtRate(r.up))}</td>
+      <td class="num">${esc(fmtBytes(f.down + f.up))}</td><td>${sparkline(flowKey(f))}</td></tr>`;
+  }).join("") : `<tr><td colspan="11" class="empty">No routes or proxies.</td></tr>`;
+
+  const links = [
+    ...Object.entries(m.tunnels).map(([k, v]) => ["tunnel " + k, v, last.tunnels[k]]),
+    ...Object.entries(m.vpns).map(([k, v]) => ["vpn " + k, v, last.vpns[k]]),
+  ];
+  $("#links").innerHTML = links.length ? links.map(([name, v, r]) => {
+    r = r || { down: 0, up: 0 };
+    return `<tr><td>${esc(name)}</td><td class="num">${v.active}</td><td class="num">${v.total}</td><td class="num">${esc(fmtRate(r.down))}</td><td class="num">${esc(fmtRate(r.up))}</td><td class="num">${esc(fmtBytes(v.down + v.up))}</td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">No tunnels or VPNs.</td></tr>`;
+
+  drawChart();
+}
+
+function sparkline(key) {
+  const vals = M.samples.slice(-60).map((s) => { const r = s.flows[key]; return r ? r.down + r.up : 0; });
+  if (vals.length < 2) return "";
+  const max = Math.max(...vals) || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * 88 + 1},${22 - (v / max) * 20}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 90 24" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--series-1)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+function niceStep(max) {
+  const raw = max / 4;
+  const mag = Math.pow(1024, Math.floor(Math.log(raw) / Math.log(1024)));
+  const n = raw / mag;
+  const step = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512].find((c) => n <= c) || 1024;
+  return step * mag;
+}
+
+function drawChart() {
+  const svg = $("#chart-svg");
+  if (!svg) return;
+  const W = svg.clientWidth || 800, H = 240, L = 72, R = 12, T = 10, B = 26;
+  const samples = M.samples;
+  const now = samples.length ? samples[samples.length - 1].t : Date.now();
+  const span = 300000;
+  const x = (t) => L + ((t - (now - span)) / span) * (W - L - R);
+  const max = Math.max(1024, ...samples.map((s) => Math.max(s.rate.down, s.rate.up)));
+  const step = niceStep(max);
+  const top = Math.ceil(max / step) * step;
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+
+  let g = "";
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 0 ? "var(--axis)" : "var(--grid)"}" stroke-width="1"/>`;
+    g += `<text class="axis-label" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${esc(fmtRate(v))}</text>`;
+  }
+  for (const m of [5, 4, 3, 2, 1, 0]) {
+    const tx = x(now - m * 60000);
+    g += `<text class="axis-label" x="${tx}" y="${H - 6}" text-anchor="middle">${m ? "-" + m + "m" : "now"}</text>`;
+  }
+  const path = (key) => samples.length < 2 ? "" : "M" + samples.map((s) => `${x(s.t).toFixed(1)},${y(s.rate[key]).toFixed(1)}`).join("L");
+  g += `<path d="${path("up")}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  g += `<path d="${path("down")}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  g += `<g id="cross" style="display:none"><line id="cross-line" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1"/>
+    <circle id="dot-down" r="4" fill="var(--series-1)" stroke="var(--panel)" stroke-width="2"/><circle id="dot-up" r="4" fill="var(--series-2)" stroke="var(--panel)" stroke-width="2"/></g>`;
+  g += `<rect id="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = g;
+  M.geom = { x, y, L, R, W };
+  if (M.hoverX !== undefined) showTooltip(M.hoverX);
+}
+
+function showTooltip(px) {
+  const samples = M.samples, tip = $("#tooltip");
+  if (!samples.length || !M.geom || !tip) return;
+  let best = samples[0];
+  for (const s of samples) if (Math.abs(M.geom.x(s.t) - px) < Math.abs(M.geom.x(best.t) - px)) best = s;
+  const cx = M.geom.x(best.t);
+  $("#cross").style.display = "";
+  $("#cross-line").setAttribute("x1", cx); $("#cross-line").setAttribute("x2", cx);
+  $("#dot-down").setAttribute("cx", cx); $("#dot-down").setAttribute("cy", M.geom.y(best.rate.down));
+  $("#dot-up").setAttribute("cx", cx); $("#dot-up").setAttribute("cy", M.geom.y(best.rate.up));
+  tip.replaceChildren();
+  const head = document.createElement("div"); head.className = "t"; head.textContent = new Date(best.t).toLocaleTimeString(); tip.append(head);
+  for (const [key, name, color] of [["down", "Download", "var(--series-1)"], ["up", "Upload", "var(--series-2)"]]) {
+    const row = document.createElement("div"); row.className = "r";
+    const k = document.createElement("span"); k.className = "key"; k.style.cssText = `display:inline-block;width:12px;height:2px;border-radius:2px;background:${color}`;
+    const v = document.createElement("b"); v.textContent = fmtRate(best.rate[key]);
+    const n = document.createElement("span"); n.className = "n"; n.textContent = name;
+    row.append(k, v, n); tip.append(row);
+  }
+  tip.style.display = "block";
+  const wrap = $("#chart").getBoundingClientRect();
+  const left = cx + 12 + tip.offsetWidth > wrap.width ? cx - 12 - tip.offsetWidth : cx + 12;
+  tip.style.left = left + "px"; tip.style.top = "12px";
+}
+
+document.addEventListener("pointermove", (e) => {
+  if (e.target.id !== "hit") return;
+  const svg = $("#chart-svg"), r = svg.getBoundingClientRect();
+  M.hoverX = (e.clientX - r.left) * (svg.viewBox.baseVal.width / r.width);
+  showTooltip(M.hoverX);
+});
+document.addEventListener("pointerout", (e) => {
+  if (e.target.id !== "hit") return;
+  M.hoverX = undefined;
+  const c = $("#cross"), tip = $("#tooltip");
+  if (c) c.style.display = "none";
+  if (tip) tip.style.display = "none";
+});
+window.addEventListener("resize", () => { if (S.tab === "monitor") drawChart(); });
+
 async function pollStatus() {
   try {
     S.status = await api("GET", "/api/status");
@@ -644,10 +848,13 @@ async function pollStatus() {
 
 
 (async () => {
+  if (views[location.hash.slice(1)]) S.tab = location.hash.slice(1);
   try { await loadConfig(); } catch (err) { banner("err", err.message); return; }
   render();
   await pollStatus();
   setInterval(pollStatus, 2000);
+  pollMetrics();
+  setInterval(pollMetrics, 2000);
 })();
 </script>
 </body>

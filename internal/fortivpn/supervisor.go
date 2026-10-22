@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xtunnel/internal/config"
+	"xtunnel/internal/metrics"
 )
 
 const (
@@ -125,7 +126,11 @@ func (s *Supervisor) DialContext(ctx context.Context, network, address string) (
 	if n == nil {
 		return nil, fmt.Errorf("fortivpn %s tunnel is down", s.cfg.Name)
 	}
-	return n.dial(ctx, network, address)
+	conn, err := n.dial(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return metrics.Get(metrics.VPNKey(s.cfg.Name)).Wrap(conn), nil
 }
 
 func (s *Supervisor) runOnce(ctx context.Context) error {

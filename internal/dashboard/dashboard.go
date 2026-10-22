@@ -46,6 +46,7 @@ func New(a *app.App) http.Handler {
 	h.mux.HandleFunc("POST /api/logout", h.logout)
 	h.mux.HandleFunc("GET /{$}", h.index)
 	h.mux.HandleFunc("GET /api/status", h.status)
+	h.mux.HandleFunc("GET /api/metrics", h.metrics)
 	h.mux.HandleFunc("GET /api/config", h.getConfig)
 	h.mux.HandleFunc("PUT /api/config", h.putConfig)
 	h.mux.HandleFunc("PUT /api/config/yaml", h.putYAML)
@@ -194,6 +195,10 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 		app.Status
 		Auth bool `json:"auth"`
 	}{h.app.Status(), h.app.AdminPassword() != ""})
+}
+
+func (h *handler) metrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.app.Metrics())
 }
 
 func (h *handler) getConfig(w http.ResponseWriter, r *http.Request) {
