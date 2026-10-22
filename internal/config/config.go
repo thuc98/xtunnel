@@ -1,7 +1,10 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +23,10 @@ type Config struct {
 
 	ReverseRoutes []ReverseRouteConfig `yaml:"reverse_routes,omitempty" json:"reverse_routes"`
 
-	FortiVPNs []FortiVPNConfig `yaml:"fortivpns,omitempty" json:"fortivpns"`
+	VPNs []VPNConfig `yaml:"vpns,omitempty" json:"vpns"`
+
+	FortiVPNs  []FortiVPNConfig  `yaml:"fortivpns,omitempty" json:"-"`
+	WireGuards []WireGuardConfig `yaml:"wireguards,omitempty" json:"-"`
 
 	Web WebConfig `yaml:"web,omitempty" json:"web"`
 
@@ -36,6 +42,7 @@ type ServerConfig struct {
 
 type ClientConfig struct {
 	ServerAddr           string `yaml:"server_addr,omitempty" json:"server_addr"`
+	SNI                  string `yaml:"sni,omitempty" json:"sni"`
 	SecretKey            string `yaml:"secret_key,omitempty" json:"secret_key"`
 	KeepAliveIntervalSec int    `yaml:"keep_alive_interval_sec,omitempty" json:"keep_alive_interval_sec"`
 	MaxIdleTimeoutSec    int    `yaml:"max_idle_timeout_sec,omitempty" json:"max_idle_timeout_sec"`
@@ -58,7 +65,9 @@ type RouteConfig struct {
 
 	Tunnel string `yaml:"tunnel,omitempty" json:"tunnel"`
 
-	FortiVPN string `yaml:"fortivpn,omitempty" json:"fortivpn"`
+	VPN string `yaml:"vpn,omitempty" json:"vpn"`
+
+	FortiVPN string `yaml:"fortivpn,omitempty" json:"-"`
 	Note     string `yaml:"note,omitempty" json:"note"`
 }
 
@@ -69,7 +78,9 @@ type ReverseRouteConfig struct {
 
 	Tunnel string `yaml:"tunnel,omitempty" json:"tunnel"`
 
-	FortiVPN string `yaml:"fortivpn,omitempty" json:"fortivpn"`
+	VPN string `yaml:"vpn,omitempty" json:"vpn"`
+
+	FortiVPN string `yaml:"fortivpn,omitempty" json:"-"`
 	Note     string `yaml:"note,omitempty" json:"note"`
 }
 
@@ -90,6 +101,76 @@ type FortiVPNConfig struct {
 	ReconnectIntervalSec int    `yaml:"reconnect_interval_sec,omitempty" json:"reconnect_interval_sec"`
 
 	Socks5 Socks5Config `yaml:"socks5,omitempty" json:"socks5"`
+}
+
+const (
+	VPNTypeFortiVPN  = "fortivpn"
+	VPNTypeWireGuard = "wireguard"
+)
+
+type VPNConfig struct {
+	Name     string `yaml:"name" json:"name"`
+	Type     string `yaml:"type" json:"type"`
+	Disabled bool   `yaml:"disabled,omitempty" json:"disabled"`
+
+	Host                 string `yaml:"host,omitempty" json:"host"`
+	Port                 int    `yaml:"port,omitempty" json:"port"`
+	Username             string `yaml:"username,omitempty" json:"username"`
+	Password             string `yaml:"password,omitempty" json:"password"`
+	Realm                string `yaml:"realm,omitempty" json:"realm"`
+	TrustedCert          string `yaml:"trusted_cert,omitempty" json:"trusted_cert"`
+	InsecureSkipVerify   bool   `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify"`
+	UserAgent            string `yaml:"user_agent,omitempty" json:"user_agent"`
+	ReconnectIntervalSec int    `yaml:"reconnect_interval_sec,omitempty" json:"reconnect_interval_sec"`
+
+	PrivateKey string          `yaml:"private_key,omitempty" json:"private_key"`
+	Addresses  []string        `yaml:"addresses,omitempty" json:"addresses"`
+	DNS        []string        `yaml:"dns,omitempty" json:"dns"`
+	MTU        int             `yaml:"mtu,omitempty" json:"mtu"`
+	Peers      []WireGuardPeer `yaml:"peers,omitempty" json:"peers"`
+
+	Socks5 Socks5Config `yaml:"socks5,omitempty" json:"socks5"`
+}
+
+func (v VPNConfig) FortiVPN() FortiVPNConfig {
+	return FortiVPNConfig{Name: v.Name, Disabled: v.Disabled, Host: v.Host, Port: v.Port, Username: v.Username,
+		Password: v.Password, Realm: v.Realm, TrustedCert: v.TrustedCert, InsecureSkipVerify: v.InsecureSkipVerify,
+		UserAgent: v.UserAgent, ReconnectIntervalSec: v.ReconnectIntervalSec, Socks5: v.Socks5}
+}
+
+func (v VPNConfig) WireGuard() WireGuardConfig {
+	return WireGuardConfig{Name: v.Name, Disabled: v.Disabled, PrivateKey: v.PrivateKey, Addresses: v.Addresses,
+		DNS: v.DNS, MTU: v.MTU, Peers: v.Peers, Socks5: v.Socks5}
+}
+
+func FortiVPNEntry(f FortiVPNConfig) VPNConfig {
+	return VPNConfig{Name: f.Name, Type: VPNTypeFortiVPN, Disabled: f.Disabled, Host: f.Host, Port: f.Port,
+		Username: f.Username, Password: f.Password, Realm: f.Realm, TrustedCert: f.TrustedCert,
+		InsecureSkipVerify: f.InsecureSkipVerify, UserAgent: f.UserAgent, ReconnectIntervalSec: f.ReconnectIntervalSec, Socks5: f.Socks5}
+}
+
+func WireGuardEntry(w WireGuardConfig) VPNConfig {
+	return VPNConfig{Name: w.Name, Type: VPNTypeWireGuard, Disabled: w.Disabled, PrivateKey: w.PrivateKey,
+		Addresses: w.Addresses, DNS: w.DNS, MTU: w.MTU, Peers: w.Peers, Socks5: w.Socks5}
+}
+
+type WireGuardConfig struct {
+	Name       string          `yaml:"name" json:"name"`
+	Disabled   bool            `yaml:"disabled,omitempty" json:"disabled"`
+	PrivateKey string          `yaml:"private_key" json:"private_key"`
+	Addresses  []string        `yaml:"addresses" json:"addresses"`
+	DNS        []string        `yaml:"dns,omitempty" json:"dns"`
+	MTU        int             `yaml:"mtu,omitempty" json:"mtu"`
+	Peers      []WireGuardPeer `yaml:"peers" json:"peers"`
+	Socks5     Socks5Config    `yaml:"socks5,omitempty" json:"socks5"`
+}
+
+type WireGuardPeer struct {
+	PublicKey           string   `yaml:"public_key" json:"public_key"`
+	PresharedKey        string   `yaml:"preshared_key,omitempty" json:"preshared_key"`
+	Endpoint            string   `yaml:"endpoint" json:"endpoint"`
+	AllowedIPs          []string `yaml:"allowed_ips" json:"allowed_ips"`
+	PersistentKeepalive int      `yaml:"persistent_keepalive,omitempty" json:"persistent_keepalive"`
 }
 
 type Socks5Config struct {
@@ -148,6 +229,8 @@ func Parse(data []byte, path string) (*Config, error) {
 			return nil, err
 		}
 	}
+	cfg.migrateVPNs()
+	cfg.migrateRouteVPN()
 	if err := cfg.migrateClient(); err != nil {
 		return nil, err
 	}
@@ -165,10 +248,37 @@ func ParseRaw(data []byte) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	cfg.migrateVPNs()
+	cfg.migrateRouteVPN()
 	if err := cfg.migrateClient(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func (c *Config) migrateVPNs() {
+	for _, f := range c.FortiVPNs {
+		c.VPNs = append(c.VPNs, FortiVPNEntry(f))
+	}
+	for _, w := range c.WireGuards {
+		c.VPNs = append(c.VPNs, WireGuardEntry(w))
+	}
+	c.FortiVPNs, c.WireGuards = nil, nil
+}
+
+func (c *Config) migrateRouteVPN() {
+	for i := range c.Routes {
+		if c.Routes[i].VPN == "" {
+			c.Routes[i].VPN = c.Routes[i].FortiVPN
+		}
+		c.Routes[i].FortiVPN = ""
+	}
+	for i := range c.ReverseRoutes {
+		if c.ReverseRoutes[i].VPN == "" {
+			c.ReverseRoutes[i].VPN = c.ReverseRoutes[i].FortiVPN
+		}
+		c.ReverseRoutes[i].FortiVPN = ""
+	}
 }
 
 func (c *Config) migrateClient() error {
@@ -259,19 +369,34 @@ func (c *Config) Validate() error {
 			return "", fmt.Errorf("tunnel is required when several tunnels are configured")
 		}
 	}
-	vpns := make(map[string]bool, len(c.FortiVPNs))
-	for i := range c.FortiVPNs {
-		vpn := &c.FortiVPNs[i]
-		if err := vpn.validate(); err != nil {
-			return fmt.Errorf("fortivpns[%d]: %w", i, err)
+	c.migrateVPNs()
+	c.migrateRouteVPN()
+	vpns := make(map[string]bool, len(c.VPNs))
+	for i := range c.VPNs {
+		v := &c.VPNs[i]
+		switch v.Type {
+		case VPNTypeFortiVPN:
+			f := v.FortiVPN()
+			if err := f.validate(); err != nil {
+				return fmt.Errorf("vpns[%d] (%s): %w", i, v.Name, err)
+			}
+			*v = FortiVPNEntry(f)
+		case VPNTypeWireGuard:
+			w := v.WireGuard()
+			if err := w.validate(); err != nil {
+				return fmt.Errorf("vpns[%d] (%s): %w", i, v.Name, err)
+			}
+			*v = WireGuardEntry(w)
+		default:
+			return fmt.Errorf("vpns[%d] (%s): type must be %s or %s", i, v.Name, VPNTypeFortiVPN, VPNTypeWireGuard)
 		}
-		if vpns[vpn.Name] {
-			return fmt.Errorf("fortivpns[%d]: duplicate name %q", i, vpn.Name)
+		if vpns[v.Name] {
+			return fmt.Errorf("vpns[%d]: duplicate name %q", i, v.Name)
 		}
-		vpns[vpn.Name] = true
-		if l := vpn.Socks5.Listen; vpn.Socks5.Active() {
+		vpns[v.Name] = true
+		if l := v.Socks5.Listen; v.Socks5.Active() {
 			if socksListen[l] {
-				return fmt.Errorf("fortivpns[%d].socks5.listen: %s is already used by another proxy", i, l)
+				return fmt.Errorf("vpns[%d].socks5.listen: %s is already used by another proxy", i, l)
 			}
 			socksListen[l] = true
 		}
@@ -288,12 +413,12 @@ func (c *Config) Validate() error {
 		if route.Protocol != "tcp" && route.Protocol != "udp" {
 			return fmt.Errorf("routes[%d].protocol must be tcp or udp", i)
 		}
-		if route.FortiVPN != "" {
-			if !vpns[route.FortiVPN] {
-				return fmt.Errorf("routes[%d].fortivpn: unknown vpn %q", i, route.FortiVPN)
+		if route.VPN != "" {
+			if !vpns[route.VPN] {
+				return fmt.Errorf("routes[%d].vpn: unknown vpn %q", i, route.VPN)
 			}
 			if route.Tunnel != "" {
-				return fmt.Errorf("routes[%d]: set either tunnel or fortivpn, not both", i)
+				return fmt.Errorf("routes[%d]: set either tunnel or vpn, not both", i)
 			}
 			continue
 		}
@@ -316,8 +441,8 @@ func (c *Config) Validate() error {
 		if route.Protocol != "tcp" && route.Protocol != "udp" {
 			return fmt.Errorf("reverse_routes[%d].protocol must be tcp or udp", i)
 		}
-		if route.FortiVPN != "" && !vpns[route.FortiVPN] {
-			return fmt.Errorf("reverse_routes[%d].fortivpn: unknown vpn %q", i, route.FortiVPN)
+		if route.VPN != "" && !vpns[route.VPN] {
+			return fmt.Errorf("reverse_routes[%d].vpn: unknown vpn %q", i, route.VPN)
 		}
 		name, err := resolveTunnel(route.Tunnel)
 		if err != nil {
@@ -419,5 +544,73 @@ func (w *WebConfig) validate() error {
 		w.PublicURL = "http://" + host
 	}
 	w.PublicURL = strings.TrimRight(w.PublicURL, "/")
+	return nil
+}
+
+func (w *WireGuardConfig) validate() error {
+	if w.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if err := checkWGKey(w.PrivateKey); err != nil {
+		return fmt.Errorf("private_key: %w", err)
+	}
+	if len(w.Addresses) == 0 {
+		return fmt.Errorf("addresses is required")
+	}
+	for _, a := range w.Addresses {
+		if _, err := ParseWGAddress(a); err != nil {
+			return fmt.Errorf("addresses: %w", err)
+		}
+	}
+	for _, d := range w.DNS {
+		if _, err := netip.ParseAddr(d); err != nil {
+			return fmt.Errorf("dns: %w", err)
+		}
+	}
+	if w.MTU == 0 {
+		w.MTU = 1420
+	}
+	if w.MTU < 576 || w.MTU > 65535 {
+		return fmt.Errorf("mtu must be 576..65535")
+	}
+	if len(w.Peers) == 0 {
+		return fmt.Errorf("at least one peer is required")
+	}
+	for i, p := range w.Peers {
+		if err := checkWGKey(p.PublicKey); err != nil {
+			return fmt.Errorf("peers[%d].public_key: %w", i, err)
+		}
+		if p.PresharedKey != "" {
+			if err := checkWGKey(p.PresharedKey); err != nil {
+				return fmt.Errorf("peers[%d].preshared_key: %w", i, err)
+			}
+		}
+		if _, _, err := net.SplitHostPort(p.Endpoint); err != nil {
+			return fmt.Errorf("peers[%d].endpoint: %w", i, err)
+		}
+		if len(p.AllowedIPs) == 0 {
+			return fmt.Errorf("peers[%d].allowed_ips is required", i)
+		}
+		for _, a := range p.AllowedIPs {
+			if _, err := netip.ParsePrefix(a); err != nil {
+				return fmt.Errorf("peers[%d].allowed_ips: %w", i, err)
+			}
+		}
+	}
+	return w.Socks5.validate()
+}
+
+func ParseWGAddress(s string) (netip.Addr, error) {
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return p.Addr(), nil
+	}
+	return netip.ParseAddr(s)
+}
+
+func checkWGKey(k string) error {
+	b, err := base64.StdEncoding.DecodeString(k)
+	if err != nil || len(b) != 32 {
+		return fmt.Errorf("must be a base64 WireGuard key")
+	}
 	return nil
 }

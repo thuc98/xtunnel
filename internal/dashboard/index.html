@@ -153,9 +153,10 @@ function banner(kind, text) {
 }
 
 function normalize(cfg) {
-  cfg.routes ||= []; cfg.reverse_routes ||= []; cfg.fortivpns ||= [];
+  cfg.routes ||= []; cfg.reverse_routes ||= []; cfg.vpns ||= [];
+  for (const v of cfg.vpns) { v.peers ||= []; v.addresses ||= []; v.dns ||= []; for (const p of v.peers) p.allowed_ips ||= []; }
   cfg.tunnels ||= []; cfg.server ||= {}; cfg.web ||= {}; cfg.otp ||= {}; cfg.otp.telegram ||= {};
-  for (const v of [...cfg.fortivpns, ...cfg.tunnels]) v.socks5 ||= {};
+  for (const v of [...cfg.vpns, ...cfg.tunnels]) v.socks5 ||= {};
   return cfg;
 }
 
@@ -182,7 +183,7 @@ function dropDraft() {
   try { localStorage.removeItem(DRAFT_KEY); } catch {}
 }
 
-const SECTIONS = { routes: "Routes", reverse_routes: "Reverse routes", tunnels: "Tunnels", fortivpns: "VPNs", server: "Server", web: "Web", otp: "OTP" };
+const SECTIONS = { routes: "Routes", reverse_routes: "Reverse routes", tunnels: "Tunnels", vpns: "VPNs", server: "Server", web: "Web", otp: "OTP" };
 
 function updateDraft() {
   const base = JSON.parse(S.base);
@@ -208,6 +209,7 @@ function readInput(el) {
   switch (el.dataset.type) {
     case "int": return el.value === "" ? 0 : parseInt(el.value, 10) || 0;
     case "bool": return el.checked;
+    case "list": return el.value.split(",").map((x) => x.trim()).filter(Boolean);
     default: return el.value;
   }
 }
@@ -219,9 +221,9 @@ document.addEventListener("input", (e) => {
   const old = getPath(S.cfg, path);
   const value = readInput(el);
   setPath(S.cfg, path, value);
-  const m = path.match(/^(fortivpns|tunnels)\.(\d+)\.name$/);
+  const m = path.match(/^(vpns|tunnels)\.(\d+)\.name$/);
   if (m && old) {
-    const key = m[1] === "fortivpns" ? "fortivpn" : "tunnel";
+    const key = m[1] === "tunnels" ? "tunnel" : "vpn";
     for (const r of [...S.cfg.routes, ...S.cfg.reverse_routes]) if (r[key] === old) r[key] = value;
   }
   setDirty(true);
@@ -234,13 +236,18 @@ function field(label, path, opts = {}) {
     return `<div class="field check"><label><input type="checkbox" data-path="${path}" data-type="bool" ${v ? "checked" : ""}> ${esc(label)}</label></div>`;
   }
   const inputType = opts.secret ? "password" : type === "int" ? "number" : "text";
-  const val = type === "int" && !v ? "" : v ?? "";
+
+  const val = type === "int" && !v ? "" : type === "list" ? (v || []).join(", ") : v ?? "";
   return `<div class="field"><label>${esc(label)}</label><input type="${inputType}" data-path="${path}" data-type="${type}" value="${esc(val)}" placeholder="${esc(opts.placeholder || "")}" ${opts.secret ? 'autocomplete="new-password"' : ""}></div>`;
+}
+
+function vpnNames() {
+  return S.cfg.vpns.map((x) => x.name).filter(Boolean);
 }
 
 function vpnSelect(path, emptyLabel) {
   const v = getPath(S.cfg, path) || "";
-  const names = S.cfg.fortivpns.map((x) => x.name).filter(Boolean);
+  const names = vpnNames();
   const opts = [`<option value="">${esc(emptyLabel)}</option>`]
     .concat(names.map((n) => `<option value="${esc(n)}" ${n === v ? "selected" : ""}>VPN: ${esc(n)}</option>`));
   if (v && !names.includes(v)) opts.push(`<option value="${esc(v)}" selected>VPN: ${esc(v)} (missing)</option>`);
@@ -258,9 +265,9 @@ function tunnelSelect(path) {
 
 function viaSelect(i) {
   const r = S.cfg.routes[i];
-  const cur = r.fortivpn ? "vpn:" + r.fortivpn : "tunnel:" + (r.tunnel || "");
+  const cur = r.vpn ? "vpn:" + r.vpn : "tunnel:" + (r.tunnel || "");
   const tunnels = S.cfg.tunnels.map((x) => x.name).filter(Boolean);
-  const vpns = S.cfg.fortivpns.map((x) => x.name).filter(Boolean);
+  const vpns = vpnNames();
   const opt = (value, label) => `<option value="${esc(value)}" ${value === cur ? "selected" : ""}>${esc(label)}</option>`;
   const opts = [opt("tunnel:", tunnels.length === 1 ? `Tunnel: ${tunnels[0]} (only one)` : "Choose…")]
     .concat(tunnels.map((n) => opt("tunnel:" + n, "Tunnel: " + n)), vpns.map((n) => opt("vpn:" + n, "VPN: " + n)));
@@ -294,11 +301,15 @@ document.addEventListener("change", (e) => {
     if (e.target.checked && !sc.listen) sc.listen = nextSocksPort();
     sc.disabled = !e.target.checked;
     setPath(S.cfg, ds.socks + ".socks5", sc);
+  } else if (ds.retype !== undefined) {
+    const v = S.cfg.vpns[Number(ds.retype)];
+    v.type = e.target.value;
+    if (v.type === "wireguard" && !v.peers.length) v.peers.push({ public_key: "", preshared_key: "", endpoint: "", allowed_ips: [], persistent_keepalive: 25 });
   } else if (ds.via !== undefined) {
     const r = S.cfg.routes[Number(ds.via)];
     const [kind, ...rest] = e.target.value.split(":");
     r.tunnel = kind === "tunnel" ? rest.join(":") : "";
-    r.fortivpn = kind === "vpn" ? rest.join(":") : "";
+    r.vpn = kind === "vpn" ? rest.join(":") : "";
   } else {
     return;
   }
@@ -323,7 +334,7 @@ function socksSection(p) {
 }
 
 function nextSocksPort() {
-  const used = new Set([...S.cfg.fortivpns, ...S.cfg.tunnels].map((x) => x.socks5 && x.socks5.listen).filter(Boolean));
+  const used = new Set([...S.cfg.vpns, ...S.cfg.tunnels].map((x) => x.socks5 && x.socks5.listen).filter(Boolean));
   for (let port = 1080; ; port++) if (!used.has(":" + port)) return ":" + port;
 }
 
@@ -349,8 +360,8 @@ function routesSummary() {
   const rows = [];
   const only = S.cfg.tunnels.length === 1 ? S.cfg.tunnels[0].name : "";
   const tun = (name) => "tunnel " + esc(name || only || "?");
-  for (const r of S.cfg.routes) rows.push(`<tr><td>route</td><td><code>localhost:${esc(r.local_port)}</code> ${esc(r.protocol)}</td><td>${r.fortivpn ? "VPN " + esc(r.fortivpn) : tun(r.tunnel)}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
-  for (const r of S.cfg.reverse_routes) rows.push(`<tr><td>reverse</td><td><code>server:${esc(r.remote_port)}</code> ${esc(r.protocol)}</td><td>${tun(r.tunnel)} → client${r.fortivpn ? " → VPN " + esc(r.fortivpn) : ""}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
+  for (const r of S.cfg.routes) rows.push(`<tr><td>route</td><td><code>localhost:${esc(r.local_port)}</code> ${esc(r.protocol)}</td><td>${r.vpn ? "VPN " + esc(r.vpn) : tun(r.tunnel)}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
+  for (const r of S.cfg.reverse_routes) rows.push(`<tr><td>reverse</td><td><code>server:${esc(r.remote_port)}</code> ${esc(r.protocol)}</td><td>${tun(r.tunnel)} → client${r.vpn ? " → VPN " + esc(r.vpn) : ""}</td><td><code>${esc(r.target)}</code></td><td>${esc(r.note)}</td></tr>`);
   if (!rows.length) return `<div class="empty">No routes yet.</div>`;
   return `<table><thead><tr><th>Type</th><th>Listen</th><th>Through</th><th>Target</th><th>Note</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
@@ -373,8 +384,9 @@ function updateOverview() {
 
   $("#vpn-status").innerHTML = st.vpns.length ? st.vpns.map((v) => `
     <div class="card">
-      <h3><span class="row">${esc(v.name)} ${statusChip(v.state)}</span> ${onSwitch("fortivpns", v.name)}</h3>
-      <div class="kv">Gateway <b>${esc(v.gateway)}</b></div>
+      <h3><span class="row">${esc(v.name)} ${statusChip(v.state)}</span> ${onSwitch("vpns", v.name)}</h3>
+      <div class="kv">${v.kind === "wireguard" ? "WireGuard" : "FortiGate"} <b>${esc(v.gateway)}</b></div>
+      ${v.last_handshake ? `<div class="kv">Last handshake <b>${esc(new Date(v.last_handshake).toLocaleTimeString())}</b></div>` : ""}
       ${v.address ? `<div class="kv">Address <b>${esc(v.address)}</b></div>` : ""}
       ${v.dns && v.dns.length ? `<div class="kv">DNS <b>${esc(v.dns.join(", "))}</b></div>` : ""}
       ${v.socks5 ? `<div class="kv">SOCKS5 <b>${esc(v.socks5)}</b></div>` : ""}
@@ -453,7 +465,7 @@ function renderReverse() {
       <td style="width:90px">${protoSelect(`reverse_routes.${i}.protocol`)}</td>
       <td><input data-path="reverse_routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
       <td style="width:200px">${tunnelSelect(`reverse_routes.${i}.tunnel`)}</td>
-      <td style="width:200px">${vpnSelect(`reverse_routes.${i}.fortivpn`, "Direct from this machine")}</td>
+      <td style="width:200px">${vpnSelect(`reverse_routes.${i}.vpn`, "Direct from this machine")}</td>
       <td><input data-path="reverse_routes.${i}.note" value="${esc(r.note)}" placeholder="What is it?"></td>
       <td style="width:44px"><button class="btn icon danger" data-del="reverse_routes.${i}" title="Delete">✕</button></td>
     </tr>`).join("");
@@ -468,17 +480,37 @@ function renderReverse() {
   </section>`;
 }
 
-function renderVPNs() {
-  const cards = S.cfg.fortivpns.map((v, i) => {
-    const p = `fortivpns.${i}`;
-    return `
-    <div class="vpn-card">
-      <div class="head">
-        <div class="row"><strong>${esc(v.name || "New VPN")}</strong> <span data-vpn-chip="${esc(v.name)}"></span></div>
-        <div class="row">${onSwitch("fortivpns", v.name)}<button class="btn danger" data-del="fortivpns.${i}">Delete</button></div>
+const VPN_TYPES = { fortivpn: "FortiGate SSL VPN", wireguard: "WireGuard" };
+
+function vpnFields(v, p) {
+  if (v.type === "wireguard") {
+    const peers = v.peers.map((peer, j) => {
+      const pp = `${p}.peers.${j}`;
+      return `
+      <div class="row" style="justify-content:space-between;margin:14px 0 6px">
+        <div class="sub" style="margin:0">Peer ${j + 1}</div>
+        <button class="btn icon danger" data-del-peer="${p.split(".")[1]}.${j}" title="Remove peer">✕</button>
       </div>
       <div class="grid">
-        ${field("Name", p + ".name")}
+        ${field("Public key", pp + ".public_key")}
+        ${field("Preshared key", pp + ".preshared_key", { secret: true, placeholder: "optional" })}
+        ${field("Endpoint", pp + ".endpoint", { placeholder: "host:51820" })}
+        ${field("Allowed IPs", pp + ".allowed_ips", { type: "list", placeholder: "10.8.0.0/24, 192.168.1.0/24" })}
+        ${field("Keepalive (s)", pp + ".persistent_keepalive", { type: "int", placeholder: "25" })}
+      </div>`;
+    }).join("");
+    return `
+      <div class="grid">
+        ${field("Private key", p + ".private_key", { secret: true })}
+        ${field("Addresses", p + ".addresses", { type: "list", placeholder: "10.8.0.2/32" })}
+        ${field("DNS", p + ".dns", { type: "list", placeholder: "optional, e.g. 10.8.0.1" })}
+        ${field("MTU", p + ".mtu", { type: "int", placeholder: "1420" })}
+      </div>
+      ${peers}
+      <div class="row" style="margin-top:10px"><button class="btn" data-add-peer="${p.split(".")[1]}">+ Add peer</button></div>`;
+  }
+  return `
+      <div class="grid">
         ${field("Gateway host", p + ".host")}
         ${field("Port", p + ".port", { type: "int", placeholder: "443" })}
         ${field("Username", p + ".username")}
@@ -487,16 +519,73 @@ function renderVPNs() {
         ${field("Trusted cert (SHA256)", p + ".trusted_cert")}
         ${field("Reconnect interval (s)", p + ".reconnect_interval_sec", { type: "int", placeholder: "5" })}
         ${field("Accept any certificate", p + ".insecure_skip_verify", { type: "bool" })}
+      </div>`;
+}
+
+function renderVPNs() {
+  const cards = S.cfg.vpns.map((v, i) => {
+    const p = `vpns.${i}`;
+    const types = Object.entries(VPN_TYPES).map(([k, label]) => `<option value="${k}" ${k === v.type ? "selected" : ""}>${esc(label)}</option>`).join("");
+    return `
+    <div class="vpn-card">
+      <div class="head">
+        <div class="row"><strong>${esc(v.name || "New VPN")}</strong> <span data-vpn-chip="${esc(v.name)}"></span></div>
+        <div class="row">${onSwitch("vpns", v.name)}<button class="btn danger" data-del="vpns.${i}">Delete</button></div>
       </div>
+      <div class="grid" style="margin-bottom:10px">
+        ${field("Name", p + ".name")}
+        <div class="field"><label>Type</label><select data-path="${p}.type" data-retype="${i}">${types}</select></div>
+      </div>
+      ${vpnFields(v, p)}
       ${socksSection(p)}
     </div>`;
   }).join("");
   return `
   <section class="panel">
-    <h2>FortiGate VPNs</h2>
+    <h2>VPNs</h2>
     ${cards || `<div class="empty">No VPNs.</div>`}
-    <button class="btn" data-add="fortivpns">+ Add VPN</button>
+    <div class="row">
+      <button class="btn" data-add="vpns">+ Add VPN</button>
+      <button class="btn" id="wg-import-toggle">Import WireGuard .conf</button>
+    </div>
+    <div id="wg-import" hidden style="margin-top:12px">
+      <textarea id="wg-conf" spellcheck="false" style="min-height:180px" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 10.8.0.0/24"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="wg-import-add">Add from .conf</button></div>
+    </div>
   </section>`;
+}
+
+function parseWGConf(text, name) {
+  const w = { name, type: "wireguard", private_key: "", addresses: [], dns: [], mtu: 0, peers: [], socks5: {} };
+  let section = "", peer = null;
+  const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
+  for (let line of text.split(/\r?\n/)) {
+    line = line.replace(/[#;].*$/, "").trim();
+    if (!line) continue;
+    const sec = line.match(/^\[(\w+)\]$/);
+    if (sec) {
+      section = sec[1].toLowerCase();
+      if (section === "peer") { peer = { public_key: "", preshared_key: "", endpoint: "", allowed_ips: [], persistent_keepalive: 0 }; w.peers.push(peer); }
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const k = line.slice(0, eq).trim().toLowerCase(), v = line.slice(eq + 1).trim();
+    if (section === "interface") {
+      if (k === "privatekey") w.private_key = v;
+      else if (k === "address") w.addresses.push(...list(v));
+      else if (k === "dns") w.dns.push(...list(v).filter((x) => /^[0-9.]+$|:/.test(x)));
+      else if (k === "mtu") w.mtu = parseInt(v, 10) || 0;
+    } else if (section === "peer" && peer) {
+      if (k === "publickey") peer.public_key = v;
+      else if (k === "presharedkey") peer.preshared_key = v;
+      else if (k === "endpoint") peer.endpoint = v;
+      else if (k === "allowedips") peer.allowed_ips.push(...list(v));
+      else if (k === "persistentkeepalive") peer.persistent_keepalive = parseInt(v, 10) || 0;
+    }
+  }
+  if (!w.private_key || !w.peers.length) throw new Error("Not a WireGuard config: needs [Interface] PrivateKey and a [Peer]");
+  return w;
 }
 
 function updateVPNChips() {
@@ -523,6 +612,7 @@ function renderTunnels() {
       <div class="grid">
         ${field("Name", p + ".name")}
         ${field("Server address", p + ".server_addr", { placeholder: "host:port" })}
+        ${field("SNI", p + ".sni", { placeholder: "optional, e.g. www.example.com" })}
         ${field("Secret key", p + ".secret_key", { secret: true })}
         ${field("Keep-alive (s)", p + ".keep_alive_interval_sec", { type: "int", placeholder: "10" })}
         ${field("Max idle (s)", p + ".max_idle_timeout_sec", { type: "int", placeholder: "60" })}
@@ -603,23 +693,45 @@ document.addEventListener("click", async (e) => {
   }
   if (t.dataset.add) {
     const list = S.cfg[t.dataset.add];
-    if (t.dataset.add === "routes") list.push({ local_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "", note: "" });
-    if (t.dataset.add === "reverse_routes") list.push({ remote_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "", note: "" });
+    if (t.dataset.add === "routes") list.push({ local_port: 0, protocol: "tcp", target: "", tunnel: "", vpn: "", note: "" });
+    if (t.dataset.add === "reverse_routes") list.push({ remote_port: 0, protocol: "tcp", target: "", tunnel: "", vpn: "", note: "" });
+
     if (t.dataset.add === "tunnels") list.push({ name: "tunnel" + (list.length + 1), server_addr: "", secret_key: "", socks5: {} });
-    if (t.dataset.add === "fortivpns") list.push({ name: "vpn" + (list.length + 1), host: "", port: 443, username: "", password: "", socks5: {} });
+    if (t.dataset.add === "vpns") list.push({ name: "vpn" + (list.length + 1), type: "fortivpn", host: "", port: 443, username: "", password: "",
+      addresses: [], dns: [], peers: [], socks5: {} });
     setDirty(true); render(); return;
   }
   if (t.dataset.del) {
     const [listName, idx] = t.dataset.del.split(".");
     const list = S.cfg[listName];
-    if (listName === "fortivpns" || listName === "tunnels") {
+    if (listName === "vpns" || listName === "tunnels") {
       const name = list[idx].name;
-      const key = listName === "fortivpns" ? "fortivpn" : "tunnel";
+      const key = listName === "tunnels" ? "tunnel" : "vpn";
       const used = [...S.cfg.routes, ...S.cfg.reverse_routes].some((r) => r[key] === name);
       if (used && !confirm(`Routes use "${name}". Delete it anyway? Those routes must be changed before Apply works.`)) return;
     }
     list.splice(Number(idx), 1);
     setDirty(true); render(); return;
+  }
+  if (t.dataset.addPeer !== undefined) {
+    S.cfg.vpns[Number(t.dataset.addPeer)].peers.push({ public_key: "", preshared_key: "", endpoint: "", allowed_ips: [], persistent_keepalive: 25 });
+    setDirty(true); render(); return;
+  }
+  if (t.dataset.delPeer) {
+    const [i, j] = t.dataset.delPeer.split(".").map(Number);
+    S.cfg.vpns[i].peers.splice(j, 1);
+    setDirty(true); render(); return;
+  }
+  if (t.id === "wg-import-toggle") { $("#wg-import").hidden = !$("#wg-import").hidden; return; }
+  if (t.id === "wg-import-add") {
+    try {
+      const names = new Set(vpnNames());
+      let n = S.cfg.vpns.length + 1;
+      while (names.has("wg" + n)) n++;
+      S.cfg.vpns.push(parseWGConf($("#wg-conf").value, "wg" + n));
+      setDirty(true); render(); banner("ok", "WireGuard added to the draft. Check it and press Apply.");
+    } catch (err) { banner("err", err.message); }
+    return;
   }
   if (t.id === "logout") { await api("POST", "/api/logout", {}).catch(() => {}); location.href = "/login"; return; }
   if (t.id === "save") return saveForms();

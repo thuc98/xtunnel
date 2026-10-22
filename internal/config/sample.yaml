@@ -9,6 +9,7 @@ server:
 tunnels:
   - name: "main"
     server_addr: "127.0.0.1:8443"
+    # sni: "www.example.com"   # TLS server name sent in the QUIC handshake
     secret_key: "change-me"
     keep_alive_interval_sec: 10
     max_idle_timeout_sec: 60
@@ -26,12 +27,12 @@ routes:
   - local_port: 5353
     target: "8.8.8.8:53"
     protocol: "udp"
-  # fortivpn: <name> dials target from the client through that FortiVPN tunnel
-  # (bypassing the server). The name must match an entry in fortivpns below.
+  # vpn: <name> dials target from the client through that VPN (FortiGate or WireGuard)
+  # (bypassing the server). The name must match an entry in vpns below.
   # - local_port: 3389
   #   target: "10.10.0.5:3389"
   #   protocol: "tcp"
-  #   fortivpn: "office"
+  #   vpn: "office"
 
 # Reverse routes: the server listens on remote_port and forwards to target,
 # dialed from the client machine. Only the client needs this config.
@@ -42,13 +43,15 @@ reverse_routes:
   # - remote_port: 9001
   #   target: "10.10.0.6:8080"
   #   protocol: "tcp"
-  #   fortivpn: "lab"
+  #   vpn: "lab"
 
-# Optional: FortiGate SSL VPNs, run inside xtunnel with a userspace network stack
-# (no root, OS routes/DNS untouched). Routes use one by setting fortivpn: <name>.
+# Optional: VPNs, run inside xtunnel with a userspace network stack (no root,
+# OS routes/DNS untouched). `type` picks the kind: fortivpn or wireguard.
+# Routes use one by setting vpn: <name>.
 # ${NAME} anywhere in this file is replaced by the environment variable NAME.
-fortivpns: []
+vpns: []
 #  - name: "office"
+#    type: fortivpn
 #    # disabled: true   # keep it configured but turned off
 #    host: "vpn.example.com"
 #    port: 443
@@ -65,10 +68,18 @@ fortivpns: []
 #    #   listen: "127.0.0.1:1080"
 #    #   username: ""
 #    #   password: ""
-#  - name: "lab"
-#    host: "vpn2.example.com"
-#    username: "user2"
-#    password: "${LAB_VPN_PASSWORD}"
+#  - name: "home"
+#    type: wireguard
+#    private_key: "${WG_HOME_KEY}"
+#    addresses: ["10.8.0.2/32"]
+#    dns: ["10.8.0.1"]
+#    # mtu: 1420
+#    peers:
+#      - public_key: "base64..."
+#        # preshared_key: "base64..."
+#        endpoint: "vpn.example.com:51820"
+#        allowed_ips: ["10.8.0.0/24"]
+#        persistent_keepalive: 25
 
 # Web dashboard (status, OTP confirmation, config editing) and OTP entry pages.
 # Leave listen empty to disable. The dashboard can read and change the whole

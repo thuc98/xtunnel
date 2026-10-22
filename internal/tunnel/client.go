@@ -132,12 +132,12 @@ func (c *Client) routeOpener(route config.RouteConfig) (openStreamFunc, string, 
 }
 
 func (c *Client) routeDialer(route config.RouteConfig) (openStreamFunc, string, error) {
-	if route.FortiVPN == "" {
+	if route.VPN == "" {
 		return func(ctx context.Context) (net.Conn, error) {
 			return c.openStream(ctx, route)
 		}, "", nil
 	}
-	dial, err := c.targetDialer(route.FortiVPN)
+	dial, err := c.targetDialer(route.VPN)
 	if err != nil {
 		return nil, "", err
 	}
@@ -148,11 +148,11 @@ func (c *Client) routeDialer(route config.RouteConfig) (openStreamFunc, string, 
 				return nil, err
 			}
 			return &datagramConn{Conn: conn}, nil
-		}, viaLabel(route.FortiVPN), nil
+		}, viaLabel(route.VPN), nil
 	}
 	return func(ctx context.Context) (net.Conn, error) {
 		return dial(ctx, "tcp", route.Target)
-	}, viaLabel(route.FortiVPN), nil
+	}, viaLabel(route.VPN), nil
 }
 
 func (c *Client) listenTCP(ctx context.Context, route config.RouteConfig) error {
@@ -257,7 +257,7 @@ func (c *Client) bind(ctx context.Context, conn StreamConn, route config.Reverse
 	if !resp.OK {
 		return fmt.Errorf("server rejected bind: %s", resp.Error)
 	}
-	log.Printf("reverse %s route server:%d -> %s%s", route.Protocol, route.RemotePort, route.Target, viaLabel(route.FortiVPN))
+	log.Printf("reverse %s route server:%d -> %s%s", route.Protocol, route.RemotePort, route.Target, viaLabel(route.VPN))
 
 	_, err = io.Copy(io.Discard, br)
 	if err == nil {
@@ -280,7 +280,7 @@ func (c *Client) handleReverseStream(streamConn net.Conn) {
 		return
 	}
 
-	dial, err := c.targetDialer(route.FortiVPN)
+	dial, err := c.targetDialer(route.VPN)
 	if err != nil {
 		log.Printf("reverse %s route server:%d -> %s: %v", route.Protocol, route.RemotePort, route.Target, err)
 		return

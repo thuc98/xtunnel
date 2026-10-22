@@ -459,8 +459,8 @@ func TestFortiVPNRoutesDialDirectly(t *testing.T) {
 		SecretKey:            "test-secret",
 		ReconnectIntervalSec: 1,
 	}, []config.RouteConfig{
-		{LocalPort: tcpPort, Target: tcpTarget, Protocol: "tcp", FortiVPN: "office"},
-		{LocalPort: udpPort, Target: udpTarget.LocalAddr().String(), Protocol: "udp", FortiVPN: "lab"},
+		{LocalPort: tcpPort, Target: tcpTarget, Protocol: "tcp", VPN: "office"},
+		{LocalPort: udpPort, Target: udpTarget.LocalAddr().String(), Protocol: "udp", VPN: "lab"},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -520,7 +520,7 @@ func TestFortiVPNReverseRouteUsesVPNDialer(t *testing.T) {
 		RemotePort: remotePort,
 		Target:     targetAddr,
 		Protocol:   "tcp",
-		FortiVPN:   "office",
+		VPN:        "office",
 	}})
 	if err != nil {
 		t.Fatal(err)

@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "kafka.databases.svc:10.24.31.59"
     command: ["-c", "-f", "/etc/xtunnel/config.yaml"]
     environment:
       FORTIVPN_OFFICE_PASSWORD: ${FORTIVPN_OFFICE_PASSWORD:-}

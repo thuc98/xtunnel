@@ -39,17 +39,29 @@ func secretFields(cfg, old *Config) [][2]*string {
 			[2]*string{&t.SecretKey, &oldT.SecretKey},
 			[2]*string{&t.Socks5.Password, &oldT.Socks5.Password})
 	}
-	for i := range cfg.FortiVPNs {
-		vpn := &cfg.FortiVPNs[i]
-		oldVPN := &FortiVPNConfig{}
-		for j := range o.FortiVPNs {
-			if o.FortiVPNs[j].Name == vpn.Name {
-				oldVPN = &o.FortiVPNs[j]
+	for i := range cfg.VPNs {
+		v := &cfg.VPNs[i]
+		oldV := &VPNConfig{}
+		for j := range o.VPNs {
+			if o.VPNs[j].Name == v.Name {
+				oldV = &o.VPNs[j]
 			}
 		}
 		fields = append(fields,
-			[2]*string{&vpn.Password, &oldVPN.Password},
-			[2]*string{&vpn.Socks5.Password, &oldVPN.Socks5.Password})
+			[2]*string{&v.Password, &oldV.Password},
+			[2]*string{&v.PrivateKey, &oldV.PrivateKey},
+			[2]*string{&v.Socks5.Password, &oldV.Socks5.Password})
+		for k := range v.Peers {
+			p := &v.Peers[k]
+			oldP := &WireGuardPeer{}
+			for _, op := range oldV.Peers {
+				if op.PublicKey == p.PublicKey {
+					op := op
+					oldP = &op
+				}
+			}
+			fields = append(fields, [2]*string{&p.PresharedKey, &oldP.PresharedKey})
+		}
 	}
 	return fields
 }
@@ -102,6 +114,11 @@ func Marshal(cfg *Config, original []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+var renamedKeys = map[string][]string{
+	"tunnels": {"client"},
+	"vpns":    {"fortivpns", "wireguards"},
+}
+
 func copyComments(old, cur *yaml.Node) {
 	cur.HeadComment, cur.LineComment, cur.FootComment = old.HeadComment, old.LineComment, old.FootComment
 	switch {
@@ -121,11 +138,20 @@ func copyComments(old, cur *yaml.Node) {
 				}
 			}
 
-			if !matched && cur.Content[i].Value == "tunnels" {
+			if matched {
+				continue
+			}
+			for _, alias := range renamedKeys[cur.Content[i].Value] {
 				for j := 0; j+1 < len(old.Content); j += 2 {
-					if old.Content[j].Value == "client" {
+					if old.Content[j].Value == alias {
 						cur.Content[i].HeadComment = old.Content[j].HeadComment
+						copyComments(old.Content[j+1], cur.Content[i+1])
+						matched = true
+						break
 					}
+				}
+				if matched {
+					break
 				}
 			}
 		}

@@ -34,10 +34,10 @@ func TestMarshalKeepsCommentsAndSecrets(t *testing.T) {
 	}
 
 	edited := raw.MaskSecrets()
-	if edited.FortiVPNs[0].Password != SecretMask || edited.Tunnels[0].SecretKey != SecretMask {
+	if edited.VPNs[0].Password != SecretMask || edited.Tunnels[0].SecretKey != SecretMask {
 		t.Fatalf("secrets not masked: %+v", edited)
 	}
-	if raw.FortiVPNs[0].Password != "hunter2" {
+	if raw.VPNs[0].Password != "hunter2" {
 		t.Fatal("MaskSecrets changed the original")
 	}
 
@@ -81,10 +81,10 @@ func TestMarshalKeepsCommentsAndSecrets(t *testing.T) {
 func TestRestoreSecretsNewValue(t *testing.T) {
 	raw, _ := ParseRaw([]byte(savedConfig))
 	edited := raw.MaskSecrets()
-	edited.FortiVPNs[0].Password = "new-password"
+	edited.VPNs[0].Password = "new-password"
 	edited.RestoreSecrets(raw)
-	if edited.FortiVPNs[0].Password != "new-password" {
-		t.Fatalf("password = %q", edited.FortiVPNs[0].Password)
+	if edited.VPNs[0].Password != "new-password" {
+		t.Fatalf("password = %q", edited.VPNs[0].Password)
 	}
 	if edited.Tunnels[0].SecretKey != "${XT_SECRET}" {
 		t.Fatalf("secret key = %q", edited.Tunnels[0].SecretKey)

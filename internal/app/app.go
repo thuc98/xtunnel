@@ -8,8 +8,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +23,7 @@ import (
 	"xtunnel/internal/receiver"
 	"xtunnel/internal/socks5"
 	"xtunnel/internal/tunnel"
+	"xtunnel/internal/wireguard"
 )
 
 type runner struct {
@@ -48,10 +49,75 @@ func (r *runner) stop() {
 }
 
 type vpnRun struct {
-	cfg   config.FortiVPNConfig
-	sup   *fortivpn.Supervisor
-	run   *runner
-	socks *runner
+	kind     string
+	key      string
+	socksCfg config.Socks5Config
+	dial     socks5.DialFunc
+	status   func() VPNStatus
+	run      *runner
+	socks    *runner
+}
+
+type vpnSpec struct {
+	kind     string
+	name     string
+	disabled bool
+	key      string
+	gateway  string
+	socks    config.Socks5Config
+	forti    config.FortiVPNConfig
+	wg       config.WireGuardConfig
+}
+
+func vpnSpecs(cfg *config.Config) []vpnSpec {
+	var specs []vpnSpec
+	for _, v := range cfg.VPNs {
+		sp := vpnSpec{kind: v.Type, name: v.Name, disabled: v.Disabled, socks: v.Socks5}
+		conn := v
+		conn.Socks5 = config.Socks5Config{}
+		sp.key = key(conn)
+		switch v.Type {
+		case config.VPNTypeFortiVPN:
+			sp.forti = v.FortiVPN()
+			sp.gateway = net.JoinHostPort(v.Host, strconv.Itoa(v.Port))
+		case config.VPNTypeWireGuard:
+			sp.wg = v.WireGuard()
+			if len(v.Peers) > 0 {
+				sp.gateway = v.Peers[0].Endpoint
+			}
+		default:
+			continue
+		}
+		specs = append(specs, sp)
+	}
+	return specs
+}
+
+func (a *App) startVPN(sp vpnSpec) *vpnRun {
+	v := &vpnRun{kind: sp.kind, key: sp.key}
+	switch sp.kind {
+	case config.VPNTypeFortiVPN:
+		sup := fortivpn.NewSupervisor(sp.forti, a.requestOTP)
+		v.dial = sup.DialContext
+		v.status = func() VPNStatus {
+			s := sup.Status()
+			return VPNStatus{Kind: sp.kind, Name: s.Name, Gateway: s.Gateway, State: s.State, Address: s.Address, DNS: s.DNS, Error: s.Error, Since: s.Since}
+		}
+		v.run = start(a.ctx, func(ctx context.Context) { _ = sup.Run(ctx) })
+	case config.VPNTypeWireGuard:
+		t := wireguard.New(sp.wg)
+		v.dial = t.DialContext
+		v.status = func() VPNStatus {
+			s := t.Status()
+			vs := VPNStatus{Kind: sp.kind, Name: s.Name, Gateway: s.Endpoint, State: s.State, Address: s.Address, DNS: s.DNS, Error: s.Error, Since: s.Since}
+			if !s.LastHandshake.IsZero() {
+				vs.LastHandshake = &s.LastHandshake
+			}
+			return vs
+		}
+		v.run = start(a.ctx, func(ctx context.Context) { _ = t.Run(ctx) })
+	}
+	return v
 }
 
 type socksRun struct {
@@ -186,16 +252,16 @@ func (a *App) apply(cfg *config.Config) {
 		})
 	}
 
-	wanted := map[string]config.FortiVPNConfig{}
-	for _, v := range cfg.FortiVPNs {
-		if !v.Disabled {
-			wanted[v.Name] = v
+	wanted := map[string]vpnSpec{}
+	for _, sp := range vpnSpecs(cfg) {
+		if !sp.disabled {
+			wanted[sp.name] = sp
 		}
 	}
 	for name, v := range a.vpns {
-		newCfg, ok := wanted[name]
-		if !ok || !sameVPN(v.cfg, newCfg) {
-			log.Printf("fortivpn %s: stopping (config changed)", name)
+		sp, ok := wanted[name]
+		if !ok || sp.kind != v.kind || sp.key != v.key {
+			log.Printf("%s %s: stopping (config changed)", v.kind, name)
 			v.socks.stop()
 			v.run.stop()
 			a.vpnsMu.Lock()
@@ -203,27 +269,25 @@ func (a *App) apply(cfg *config.Config) {
 			a.vpnsMu.Unlock()
 		}
 	}
-	for _, vc := range cfg.FortiVPNs {
-		if vc.Disabled {
+	for _, sp := range vpnSpecs(cfg) {
+		if sp.disabled {
 			continue
 		}
-		v, ok := a.vpns[vc.Name]
+		v, ok := a.vpns[sp.name]
 		if !ok {
-			sup := fortivpn.NewSupervisor(vc, a.requestOTP)
-			v = &vpnRun{sup: sup}
-			v.run = start(a.ctx, func(ctx context.Context) { _ = sup.Run(ctx) })
+			v = a.startVPN(sp)
 			a.vpnsMu.Lock()
-			a.vpns[vc.Name] = v
+			a.vpns[sp.name] = v
 			a.vpnsMu.Unlock()
 		}
-		if !ok || v.cfg.Socks5 != vc.Socks5 {
+		if !ok || v.socksCfg != sp.socks {
 			v.socks.stop()
 			v.socks = nil
-			if vc.Socks5.Active() {
-				v.socks = a.startSocks("fortivpn "+vc.Name, metrics.SocksKey("vpn", vc.Name), vc.Socks5, v.sup.DialContext)
+			if sp.socks.Active() {
+				v.socks = a.startSocks(sp.kind+" "+sp.name, metrics.SocksKey("vpn", sp.name), sp.socks, v.dial)
 			}
 		}
-		v.cfg = vc
+		v.socksCfg = sp.socks
 	}
 
 	if a.serverMode {
@@ -241,11 +305,6 @@ func (a *App) apply(cfg *config.Config) {
 			a.startWeb(cfg.Web.Listen)
 		}
 	}
-}
-
-func sameVPN(a, b config.FortiVPNConfig) bool {
-	a.Socks5, b.Socks5 = config.Socks5Config{}, config.Socks5Config{}
-	return reflect.DeepEqual(a, b)
 }
 
 func (a *App) currentBroker() *otp.Broker {
@@ -270,7 +329,7 @@ func (a *App) vpnDial(name string) tunnel.DialFunc {
 		if !ok {
 			return nil, fmt.Errorf("fortivpn %q is disabled", name)
 		}
-		return v.sup.DialContext(ctx, network, address)
+		return v.dial(ctx, network, address)
 	}
 }
 
@@ -302,7 +361,7 @@ func (a *App) applyTunnels(cfg *config.Config) {
 	var vpnRoutes []config.RouteConfig
 	for _, r := range cfg.Routes {
 		r.Note = ""
-		if r.FortiVPN != "" {
+		if r.VPN != "" {
 			vpnRoutes = append(vpnRoutes, r)
 		} else {
 			routes[r.Tunnel] = append(routes[r.Tunnel], r)
@@ -376,8 +435,8 @@ func (a *App) applyTunnels(cfg *config.Config) {
 
 func (a *App) vpnDialers(cfg *config.Config) map[string]tunnel.DialFunc {
 	dialers := map[string]tunnel.DialFunc{}
-	for _, v := range cfg.FortiVPNs {
-		dialers[v.Name] = a.vpnDial(v.Name)
+	for _, sp := range vpnSpecs(cfg) {
+		dialers[sp.name] = a.vpnDial(sp.name)
 	}
 	return dialers
 }
@@ -478,8 +537,16 @@ func (a *App) ResolveOTP(id, code string) error {
 }
 
 type VPNStatus struct {
-	fortivpn.Status
-	Socks5 string `json:"socks5,omitempty"`
+	Kind          string       `json:"kind"`
+	Name          string       `json:"name"`
+	Gateway       string       `json:"gateway"`
+	State         string       `json:"state"`
+	Address       string       `json:"address,omitempty"`
+	DNS           []netip.Addr `json:"dns,omitempty"`
+	Error         string       `json:"error,omitempty"`
+	Since         time.Time    `json:"since"`
+	LastHandshake *time.Time   `json:"last_handshake,omitempty"`
+	Socks5        string       `json:"socks5,omitempty"`
 }
 
 type TunnelStatus struct {
@@ -540,17 +607,15 @@ func (a *App) Status() Status {
 		}
 	}
 	st.Errors = errs
-	for _, vc := range a.cfg.FortiVPNs {
-		if v, ok := a.vpns[vc.Name]; ok {
-			vs := VPNStatus{Status: v.sup.Status()}
-			if vc.Socks5.Active() {
-				vs.Socks5 = vc.Socks5.Listen
+	for _, sp := range vpnSpecs(a.cfg) {
+		if v, ok := a.vpns[sp.name]; ok {
+			vs := v.status()
+			if sp.socks.Active() {
+				vs.Socks5 = sp.socks.Listen
 			}
 			st.VPNs = append(st.VPNs, vs)
-		} else if vc.Disabled {
-			st.VPNs = append(st.VPNs, VPNStatus{Status: fortivpn.Status{
-				Name: vc.Name, Gateway: net.JoinHostPort(vc.Host, strconv.Itoa(vc.Port)), State: "disabled",
-			}})
+		} else if sp.disabled {
+			st.VPNs = append(st.VPNs, VPNStatus{Kind: sp.kind, Name: sp.name, Gateway: sp.gateway, State: "disabled"})
 		}
 	}
 	if f, err := os.OpenFile(a.path, os.O_WRONLY, 0); err == nil {
@@ -603,9 +668,9 @@ func (a *App) SetVPNEnabled(name string, enabled bool) error {
 		return fmt.Errorf("current config: %w", err)
 	}
 	found := false
-	for i := range raw.FortiVPNs {
-		if raw.FortiVPNs[i].Name == name {
-			raw.FortiVPNs[i].Disabled = !enabled
+	for i := range raw.VPNs {
+		if raw.VPNs[i].Name == name {
+			raw.VPNs[i].Disabled = !enabled
 			found = true
 		}
 	}
@@ -687,8 +752,8 @@ func (a *App) Metrics() Metrics {
 		f := Flow{Kind: "route", Listen: fmt.Sprintf(":%d/%s", r.LocalPort, r.Protocol), Target: r.Target, Note: r.Note,
 			Snapshot: metrics.Lookup(metrics.RouteKey(r.Protocol, r.LocalPort))}
 		tunnel := ""
-		if r.FortiVPN != "" {
-			f.Through = "vpn " + r.FortiVPN
+		if r.VPN != "" {
+			f.Through = "vpn " + r.VPN
 		} else {
 			f.Through, tunnel = "tunnel "+r.Tunnel, r.Tunnel
 		}
@@ -697,8 +762,8 @@ func (a *App) Metrics() Metrics {
 	for _, r := range cfg.ReverseRoutes {
 		f := Flow{Kind: "reverse", Listen: fmt.Sprintf("server:%d/%s", r.RemotePort, r.Protocol), Target: r.Target, Note: r.Note,
 			Through: "tunnel " + r.Tunnel, Snapshot: metrics.Lookup(metrics.ReverseKey(r.Tunnel, r.Protocol, r.RemotePort))}
-		if r.FortiVPN != "" {
-			f.Through += " → vpn " + r.FortiVPN
+		if r.VPN != "" {
+			f.Through += " → vpn " + r.VPN
 		}
 		add(f, r.Tunnel)
 	}
@@ -708,11 +773,11 @@ func (a *App) Metrics() Metrics {
 				Snapshot: metrics.Lookup(metrics.SocksKey("tunnel", t.Name))}, t.Name)
 		}
 	}
-	for _, v := range cfg.FortiVPNs {
-		m.VPNs[v.Name] = metrics.Lookup(metrics.VPNKey(v.Name))
-		if v.Socks5.Listen != "" {
-			add(Flow{Kind: "socks5", Listen: v.Socks5.Listen, Through: "vpn " + v.Name, Target: "any",
-				Snapshot: metrics.Lookup(metrics.SocksKey("vpn", v.Name))}, "")
+	for _, sp := range vpnSpecs(cfg) {
+		m.VPNs[sp.name] = metrics.Lookup(metrics.VPNKey(sp.name))
+		if sp.socks.Listen != "" {
+			add(Flow{Kind: "socks5", Listen: sp.socks.Listen, Through: "vpn " + sp.name, Target: "any",
+				Snapshot: metrics.Lookup(metrics.SocksKey("vpn", sp.name))}, "")
 		}
 	}
 	return m

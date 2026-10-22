@@ -85,7 +85,9 @@ func (r *QuicReceiver) serveReverse(ctx context.Context, client *tunnel.Client) 
 
 func (r *QuicReceiver) connect(ctx context.Context) error {
 	quicConfig := utils.QUICConfig(r.clientConfig.KeepAliveIntervalSec, r.clientConfig.MaxIdleTimeoutSec)
-	conn, err := quic.DialAddr(ctx, r.clientConfig.ServerAddr, utils.ClientTLSConfig(), quicConfig)
+	tlsConfig := utils.ClientTLSConfig()
+	tlsConfig.ServerName = r.clientConfig.SNI
+	conn, err := quic.DialAddr(ctx, r.clientConfig.ServerAddr, tlsConfig, quicConfig)
 	if err != nil {
 		return err
 	}

@@ -49,6 +49,8 @@ reverse_routes:
     tunnel: "sg"
 ```
 
+- `sni` on a tunnel sets the TLS server name sent in the QUIC handshake (by default none for an IP
+  address, or the server's hostname).
 - `tunnel` picks the server a route goes through; it may be left out when there is only one tunnel.
   Each tunnel connects, reconnects and restarts on its own, and can be turned off with
   `disabled: true`.
@@ -72,11 +74,16 @@ xtunnel has a built-in FortiGate SSL VPN client. It speaks the gateway's PPP-ove
 a userspace TCP/IP stack ([gVisor netstack](https://gvisor.dev)), so the VPN is only used by xtunnel's
 own connections: no root, no ppp device, and the OS routes and DNS are left untouched.
 
-Name each VPN and pick one per route with `fortivpn: <name>`:
+Name each VPN and pick one per route with `vpn: <name>` (the older `fortivpn:` key still works):
+
+All VPNs live in one `vpns:` list; `type` says which kind each entry is (`fortivpn` or
+`wireguard`), and the other fields are that type's settings. The older `fortivpns:` / `wireguards:`
+lists are still read and are saved as `vpns:` from the dashboard.
 
 ```yaml
-fortivpns:
+vpns:
   - name: "office"
+    type: fortivpn
     host: "vpn.example.com"
     port: 443
     username: "user"
@@ -86,6 +93,7 @@ fortivpns:
     trusted_cert: "bb6022...6675"
     # insecure_skip_verify: true   # accept any certificate (not recommended)
   - name: "lab"
+    type: fortivpn
     host: "vpn2.example.com"
     username: "user2"
     password: "${LAB_VPN_PASSWORD}"
@@ -98,7 +106,7 @@ routes:
   - local_port: 3389
     target: "10.10.0.5:3389"   # dialed from the client through "office", not via the server
     protocol: "tcp"
-    fortivpn: "office"
+    vpn: "office"
   - local_port: 8080
     target: "127.0.0.1:80"     # normal route through the QUIC server
     protocol: "tcp"
@@ -107,7 +115,7 @@ reverse_routes:
   - remote_port: 9001
     target: "intranet.lab:8080" # server:9001 -> client -> "lab" -> target
     protocol: "tcp"
-    fortivpn: "lab"
+    vpn: "lab"
 ```
 
 - VPNs connect in the background; a route using a VPN that is not up yet fails its connection with
@@ -152,6 +160,39 @@ otp:
 - If no code arrives in time, that login attempt fails and is retried later, which makes the gateway
   send a new code and xtunnel a new request. FortiGate codes usually expire after 60 seconds
   (`two-factor-email-expiry`/`two-factor-sms-expiry`), so enter them promptly.
+
+## WireGuard
+
+WireGuard VPNs run inside xtunnel too (wireguard-go on the same userspace network stack): no root, no
+kernel interface, OS routes untouched. They are `vpns:` entries with `type: wireguard`, so routes, reverse
+routes and SOCKS5 proxies use them the same way with `vpn: <name>`.
+
+```yaml
+vpns:
+  - name: "home"
+    type: wireguard
+    private_key: "${WG_HOME_KEY}"      # base64, as in a wg-quick config
+    addresses: ["10.8.0.2/32"]
+    dns: ["10.8.0.1"]                  # optional, used to resolve hostnames through the tunnel
+    # mtu: 1420
+    peers:
+      - public_key: "base64..."
+        # preshared_key: "base64..."
+        endpoint: "vpn.example.com:51820"
+        allowed_ips: ["10.8.0.0/24", "192.168.50.0/24"]
+        persistent_keepalive: 25
+    # socks5: {listen: ":1082"}
+
+routes:
+  - local_port: 2222
+    target: "192.168.50.10:22"
+    protocol: "tcp"
+    vpn: "home"
+```
+
+The dashboard can import a wg-quick `.conf` file (VPNs → Import .conf). A WireGuard VPN shows as up
+while its last handshake is recent; WireGuard only handshakes when there is traffic, so set
+`persistent_keepalive` to keep it up while idle.
 
 ## Dashboard
 
