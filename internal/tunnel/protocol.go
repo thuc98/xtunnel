@@ -13,9 +13,8 @@ const (
 )
 
 const (
-	// StreamTypeConnect asks the server to dial Target (client -> server -> target).
 	StreamTypeConnect = ""
-	// StreamTypeBind asks the server to listen on Port and send accepted traffic back to the client.
+
 	StreamTypeBind = "bind"
 )
 
@@ -27,13 +26,11 @@ type StreamRequest struct {
 	SecretKey string `json:"secret_key"`
 }
 
-// BindResponse is the server reply to a bind request.
 type BindResponse struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
-// ReverseStreamHeader starts every server-initiated stream for a bound port.
 type ReverseStreamHeader struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port"`

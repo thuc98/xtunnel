@@ -10,7 +10,6 @@ import (
 	"sync"
 )
 
-// StreamConn is a multiplexed connection that can open and accept streams in both directions.
 type StreamConn interface {
 	StreamOpener
 	AcceptStream(context.Context) (net.Conn, error)
@@ -68,16 +67,14 @@ func (s *Server) HandleStream(ctx context.Context, conn StreamConn, streamConn n
 
 	switch req.Protocol {
 	case ProtocolTCP:
-		relayTCP(req.Target, reader, streamConn)
+		relayTCP(defaultDialer.DialContext, req.Target, reader, streamConn)
 	case ProtocolUDP:
-		relayUDP(req.Target, reader, streamConn)
+		relayUDP(defaultDialer.DialContext, req.Target, reader, streamConn)
 	default:
 		log.Printf("unsupported protocol %q", req.Protocol)
 	}
 }
 
-// handleBind listens on req.Port and tunnels accepted traffic back to the client
-// until the bind stream or the client connection is closed.
 func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequest, reader *bufio.Reader, streamConn net.Conn) {
 	key := fmt.Sprintf("%s:%d", req.Protocol, req.Port)
 	listener, err := s.listen(key, req.Protocol, req.Port)
@@ -95,7 +92,7 @@ func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequ
 
 	bindCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// The client holds the bind stream open; EOF or a dead connection releases the port.
+
 	go func() {
 		_, _ = io.Copy(io.Discard, reader)
 		cancel()
@@ -126,8 +123,6 @@ func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequ
 	log.Printf("reverse %s unbound :%d for client %s", req.Protocol, req.Port, conn.RemoteAddr())
 }
 
-// listen opens the port for a bind, taking it over from a previous bind of the same key
-// (e.g. a stale connection the client has already replaced by reconnecting).
 func (s *Server) listen(key, protocol string, port int) (io.Closer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

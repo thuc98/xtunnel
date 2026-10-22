@@ -23,6 +23,7 @@ type Client struct {
 	routes        []config.RouteConfig
 	reverseRoutes map[string]config.ReverseRouteConfig
 	opener        StreamOpener
+	vpnDialers    map[string]DialFunc
 }
 
 func NewClient(secretKey string, routes []config.RouteConfig, reverseRoutes []config.ReverseRouteConfig, opener StreamOpener) *Client {
@@ -36,6 +37,28 @@ func NewClient(secretKey string, routes []config.RouteConfig, reverseRoutes []co
 		reverseRoutes: reverse,
 		opener:        opener,
 	}
+}
+
+func (c *Client) SetVPNDialers(dialers map[string]DialFunc) {
+	c.vpnDialers = dialers
+}
+
+func (c *Client) targetDialer(vpn string) (DialFunc, error) {
+	if vpn == "" {
+		return defaultDialer.DialContext, nil
+	}
+	dial, ok := c.vpnDialers[vpn]
+	if !ok {
+		return nil, fmt.Errorf("fortivpn %q is not configured", vpn)
+	}
+	return dial, nil
+}
+
+func viaLabel(vpn string) string {
+	if vpn == "" {
+		return ""
+	}
+	return " via fortivpn " + vpn
 }
 
 func reverseKey(protocol string, port int) string {
@@ -80,35 +103,68 @@ func (c *Client) openStream(ctx context.Context, route config.RouteConfig) (net.
 	return conn, nil
 }
 
+func (c *Client) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" && network != "tcp6" {
+		return nil, fmt.Errorf("unsupported network %q", network)
+	}
+	return c.openStream(ctx, config.RouteConfig{Protocol: ProtocolTCP, Target: address})
+}
+
+func (c *Client) routeOpener(route config.RouteConfig) (openStreamFunc, string, error) {
+	if route.FortiVPN == "" {
+		return func(ctx context.Context) (net.Conn, error) {
+			return c.openStream(ctx, route)
+		}, "", nil
+	}
+	dial, err := c.targetDialer(route.FortiVPN)
+	if err != nil {
+		return nil, "", err
+	}
+	if route.Protocol == ProtocolUDP {
+		return func(ctx context.Context) (net.Conn, error) {
+			conn, err := dial(ctx, "udp", route.Target)
+			if err != nil {
+				return nil, err
+			}
+			return &datagramConn{Conn: conn}, nil
+		}, viaLabel(route.FortiVPN), nil
+	}
+	return func(ctx context.Context) (net.Conn, error) {
+		return dial(ctx, "tcp", route.Target)
+	}, viaLabel(route.FortiVPN), nil
+}
+
 func (c *Client) listenTCP(ctx context.Context, route config.RouteConfig) error {
+	open, via, err := c.routeOpener(route)
+	if err != nil {
+		return err
+	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", route.LocalPort))
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
-	log.Printf("tcp route :%d -> %s", route.LocalPort, route.Target)
+	log.Printf("tcp route :%d -> %s%s", route.LocalPort, route.Target, via)
 
-	return serveTCPListener(ctx, ln, func(ctx context.Context) (net.Conn, error) {
-		return c.openStream(ctx, route)
-	}, route.Target)
+	return serveTCPListener(ctx, ln, open, route.Target)
 }
 
 func (c *Client) listenUDP(ctx context.Context, route config.RouteConfig) error {
+	open, via, err := c.routeOpener(route)
+	if err != nil {
+		return err
+	}
 	addr := &net.UDPAddr{IP: net.IPv4zero, Port: route.LocalPort}
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	log.Printf("udp route :%d -> %s", route.LocalPort, route.Target)
+	log.Printf("udp route :%d -> %s%s", route.LocalPort, route.Target, via)
 
-	return serveUDPConn(ctx, conn, func(ctx context.Context) (net.Conn, error) {
-		return c.openStream(ctx, route)
-	}, route.Target)
+	return serveUDPConn(ctx, conn, open, route.Target)
 }
 
-// ServeReverse binds every reverse route on the server over conn and serves the
-// streams the server opens back, until conn fails or ctx is done.
 func (c *Client) ServeReverse(ctx context.Context, conn StreamConn, retryInterval time.Duration) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
@@ -153,7 +209,6 @@ func (c *Client) keepBind(ctx context.Context, conn StreamConn, route config.Rev
 	}
 }
 
-// bind asks the server to listen on route.RemotePort and blocks while the bind is held.
 func (c *Client) bind(ctx context.Context, conn StreamConn, route config.ReverseRouteConfig) error {
 	streamConn, err := conn.OpenStream(ctx)
 	if err != nil {
@@ -181,7 +236,7 @@ func (c *Client) bind(ctx context.Context, conn StreamConn, route config.Reverse
 	if !resp.OK {
 		return fmt.Errorf("server rejected bind: %s", resp.Error)
 	}
-	log.Printf("reverse %s route server:%d -> %s", route.Protocol, route.RemotePort, route.Target)
+	log.Printf("reverse %s route server:%d -> %s%s", route.Protocol, route.RemotePort, route.Target, viaLabel(route.FortiVPN))
 
 	_, err = io.Copy(io.Discard, br)
 	if err == nil {
@@ -204,10 +259,15 @@ func (c *Client) handleReverseStream(streamConn net.Conn) {
 		return
 	}
 
+	dial, err := c.targetDialer(route.FortiVPN)
+	if err != nil {
+		log.Printf("reverse %s route server:%d -> %s: %v", route.Protocol, route.RemotePort, route.Target, err)
+		return
+	}
 	switch route.Protocol {
 	case ProtocolTCP:
-		relayTCP(route.Target, reader, streamConn)
+		relayTCP(dial, route.Target, reader, streamConn)
 	case ProtocolUDP:
-		relayUDP(route.Target, reader, streamConn)
+		relayUDP(dial, route.Target, reader, streamConn)
 	}
 }

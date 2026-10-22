@@ -1,0 +1,30 @@
+services:
+  xtunnel:
+    build: .
+    container_name: xtunnel
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["-c", "-f", "/etc/xtunnel/config.yaml"]
+    environment:
+      FORTIVPN_OFFICE_PASSWORD: ${FORTIVPN_OFFICE_PASSWORD:-}
+      FORTIVPN_DEV_PASSWORD: ${FORTIVPN_DEV_PASSWORD:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - ./config.docker.yaml:/etc/xtunnel/config.yaml
+      - ./data:/data
+    ports:
+      - "4433:4433/tcp"
+      - "4433:4433/udp"
+      - "4434:4434/tcp"
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "7999:7999/tcp"
+      - "9900:9900/tcp"
+      - "7888:7888/tcp"
+      - "127.0.0.1:5433:5433/tcp"
+      - "127.0.0.1:1080:1080/tcp"
+      - "127.0.0.1:1081:1081/tcp"
+      - "127.0.0.1:20000-20049:20000-20049/tcp"
+      - "127.0.0.1:20000-20049:20000-20049/udp"
+      - "127.0.0.1:18099:18099/tcp"

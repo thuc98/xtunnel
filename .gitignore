@@ -14,3 +14,11 @@ coverage.*
 .DS_Store
 .idea/
 .vscode/
+
+# Secrets and runtime state
+.env
+/data/
+config.docker.yaml
+
+# Go modules vendored locally for the Docker build
+/vendor/

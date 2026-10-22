@@ -1,0 +1,12 @@
+dist/
+.git/
+.gitignore
+*.md
+Makefile
+config.yaml
+config.client.yaml
+config.server.yaml
+config.docker.yaml
+tunnel_smoke_test.go
+.env
+data/

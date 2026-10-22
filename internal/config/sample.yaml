@@ -4,12 +4,20 @@ server:
   keep_alive_interval_sec: 10
   max_idle_timeout_sec: 60
 
-client:
-  server_addr: "127.0.0.1:8443"
-  secret_key: "change-me"
-  keep_alive_interval_sec: 10
-  max_idle_timeout_sec: 60
-  reconnect_interval_sec: 2
+# QUIC servers the client connects to. Routes pick one with `tunnel: <name>`;
+# with a single tunnel they use it automatically.
+tunnels:
+  - name: "main"
+    server_addr: "127.0.0.1:8443"
+    secret_key: "change-me"
+    keep_alive_interval_sec: 10
+    max_idle_timeout_sec: 60
+    reconnect_interval_sec: 2
+    # disabled: true   # keep it configured but turned off
+    # SOCKS5 proxy whose connections go through this tunnel (its server dials the target).
+    # socks5:
+    #   listen: "127.0.0.1:1081"
+    #   disabled: true   # turn the proxy off and keep its settings
 
 routes:
   - local_port: 8080
@@ -18,6 +26,12 @@ routes:
   - local_port: 5353
     target: "8.8.8.8:53"
     protocol: "udp"
+  # fortivpn: <name> dials target from the client through that FortiVPN tunnel
+  # (bypassing the server). The name must match an entry in fortivpns below.
+  # - local_port: 3389
+  #   target: "10.10.0.5:3389"
+  #   protocol: "tcp"
+  #   fortivpn: "office"
 
 # Reverse routes: the server listens on remote_port and forwards to target,
 # dialed from the client machine. Only the client needs this config.
@@ -25,3 +39,54 @@ reverse_routes:
   - remote_port: 9000
     target: "127.0.0.1:3000"
     protocol: "tcp"
+  # - remote_port: 9001
+  #   target: "10.10.0.6:8080"
+  #   protocol: "tcp"
+  #   fortivpn: "lab"
+
+# Optional: FortiGate SSL VPNs, run inside xtunnel with a userspace network stack
+# (no root, OS routes/DNS untouched). Routes use one by setting fortivpn: <name>.
+# ${NAME} anywhere in this file is replaced by the environment variable NAME.
+fortivpns: []
+#  - name: "office"
+#    # disabled: true   # keep it configured but turned off
+#    host: "vpn.example.com"
+#    port: 443
+#    username: "user"
+#    password: "${OFFICE_VPN_PASSWORD}"
+#    # realm: ""
+#    # SHA256 digest of a self-signed gateway certificate (logged on the first failed connection).
+#    # trusted_cert: ""
+#    # Accept any gateway certificate. Exposes the credentials to a man-in-the-middle.
+#    # insecure_skip_verify: false
+#    # reconnect_interval_sec: 5
+#    # SOCKS5 proxy (TCP CONNECT) through this VPN for other applications.
+#    # socks5:
+#    #   listen: "127.0.0.1:1080"
+#    #   username: ""
+#    #   password: ""
+#  - name: "lab"
+#    host: "vpn2.example.com"
+#    username: "user2"
+#    password: "${LAB_VPN_PASSWORD}"
+
+# Web dashboard (status, OTP confirmation, config editing) and OTP entry pages.
+# Leave listen empty to disable. The dashboard can read and change the whole
+# config, passwords included: keep it on localhost or set an admin password.
+web:
+  listen: "127.0.0.1:18099"
+  # Base of OTP links sent to Telegram/logs; defaults to http://<listen>.
+  # public_url: "http://my-host:18099"
+  # Admin password for the dashboard; without it no login is needed.
+  # password: "${XTUNNEL_WEB_PASSWORD}"
+
+# Two-factor codes (email/SMS tokens) FortiGate asks for while logging in.
+# Every request is logged; enable web and/or telegram to answer it. The first code entered wins.
+otp:
+  timeout_sec: 600
+  telegram:
+    enabled: false
+    bot_token: "123456:ABC..."  # or "${TELEGRAM_BOT_TOKEN}" to read it from the environment
+    # Optional: without chat_id, the first chat that sends /start to the bot is linked
+    # and remembered in chat_id_file (default: telegram_chat_id next to this config).
+    # chat_id: 123456789

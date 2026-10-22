@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"xtunnel/internal/app"
 	"xtunnel/internal/config"
-	"xtunnel/internal/connector"
-	"xtunnel/internal/receiver"
+	"xtunnel/internal/dashboard"
 )
 
 func main() {
@@ -33,20 +33,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if *serverMode {
-		c, createErr := connector.NewQuicConnector(cfg.Server)
-		if createErr != nil {
-			log.Fatal(createErr)
-		}
-		err = c.Serve(ctx)
-	} else {
-		r, createErr := receiver.NewQuicReceiver(cfg.Client, cfg.Routes, cfg.ReverseRoutes)
-		if createErr != nil {
-			log.Fatal(createErr)
-		}
-		err = r.Start(ctx)
-	}
-	if err != nil && ctx.Err() == nil {
-		log.Fatal(err)
-	}
+	a := app.New(*configPath, *serverMode)
+	a.SetDashboard(dashboard.New(a))
+
+	_ = a.Run(ctx, cfg)
 }

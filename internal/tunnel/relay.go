@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -12,10 +13,12 @@ import (
 
 const udpReplyTimeout = 10 * time.Second
 
-// openStreamFunc opens a tunnel stream with its header already written.
 type openStreamFunc func(context.Context) (net.Conn, error)
 
-// serveTCPListener accepts local connections and pipes each one through a new tunnel stream.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+var defaultDialer net.Dialer
+
 func serveTCPListener(ctx context.Context, ln net.Listener, open openStreamFunc, target string) error {
 	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
 	defer stop()
@@ -43,7 +46,6 @@ func serveTCPListener(ctx context.Context, ln net.Listener, open openStreamFunc,
 	}
 }
 
-// serveUDPConn sends each received datagram through its own tunnel stream and writes back one reply.
 func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, target string) error {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -92,9 +94,8 @@ func handleUDPPacket(ctx context.Context, localConn *net.UDPConn, clientAddr *ne
 	}
 }
 
-// relayTCP dials target and pipes it with the tunnel stream.
-func relayTCP(target string, streamReader io.Reader, streamConn net.Conn) {
-	targetConn, err := net.Dial("tcp", target)
+func relayTCP(dial DialFunc, target string, streamReader io.Reader, streamConn net.Conn) {
+	targetConn, err := dial(context.Background(), "tcp", target)
 	if err != nil {
 		log.Printf("dial tcp target %s: %v", target, err)
 		return
@@ -108,9 +109,8 @@ func relayTCP(target string, streamReader io.Reader, streamConn net.Conn) {
 	)
 }
 
-// relayUDP forwards the single datagram in the stream to target and writes back one reply.
-func relayUDP(target string, streamReader io.Reader, streamConn net.Conn) {
-	targetConn, err := net.Dial("udp", target)
+func relayUDP(dial DialFunc, target string, streamReader io.Reader, streamConn net.Conn) {
+	targetConn, err := dial(context.Background(), "udp", target)
 	if err != nil {
 		log.Printf("dial udp target %s: %v", target, err)
 		return
@@ -141,6 +141,30 @@ func relayUDP(target string, streamReader io.Reader, streamConn net.Conn) {
 		return
 	}
 	_, _ = streamConn.Write(buf[:n])
+}
+
+type datagramConn struct {
+	net.Conn
+	reply *bytes.Reader
+}
+
+func (c *datagramConn) Read(p []byte) (int, error) {
+	if c.reply == nil {
+		buf := make([]byte, 64*1024)
+		n, err := c.Conn.Read(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				err = io.EOF
+			}
+			return 0, err
+		}
+		c.reply = bytes.NewReader(buf[:n])
+	}
+	return c.reply.Read(p)
+}
+
+func (c *datagramConn) CloseWrite() error {
+	return nil
 }
 
 type streamConnReader struct {

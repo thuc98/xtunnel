@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xtunnel/internal/config"
 	"xtunnel/internal/connector"
 	"xtunnel/internal/receiver"
+	"xtunnel/internal/tunnel"
 )
 
 func TestQuicTCPTunnel(t *testing.T) {
@@ -343,7 +345,6 @@ func TestQuicReverseUDPTunnel(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Datagrams sent before the bind is established are dropped, so retry.
 	buf := make([]byte, 1024)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -415,4 +416,162 @@ func TestQuicReverseRebindsAfterServerRestart(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatal("reverse route was not re-bound after server restart")
+}
+
+type countingDialer struct {
+	calls atomic.Int32
+}
+
+func (d *countingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	d.calls.Add(1)
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, address)
+}
+
+func TestFortiVPNRoutesDialDirectly(t *testing.T) {
+	tcpTarget, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	udpTarget, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpTarget.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, addr, err := udpTarget.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			_, _ = udpTarget.WriteToUDP(append([]byte("echo:"), buf[:n]...), addr)
+		}
+	}()
+
+	tcpPort := freePort(t)
+	udpPort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, []config.RouteConfig{
+		{LocalPort: tcpPort, Target: tcpTarget, Protocol: "tcp", FortiVPN: "office"},
+		{LocalPort: udpPort, Target: udpTarget.LocalAddr().String(), Protocol: "udp", FortiVPN: "lab"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	office, lab := &countingDialer{}, &countingDialer{}
+	client.SetVPNDialers(map[string]tunnel.DialFunc{"office": office.DialContext, "lab": lab.DialContext})
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	expectTCPEcho(t, fmt.Sprintf("127.0.0.1:%d", tcpPort))
+
+	conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", udpPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "echo:ping" {
+		t.Fatalf("unexpected reply %q", string(buf[:n]))
+	}
+
+	if got := office.calls.Load(); got != 1 {
+		t.Fatalf("office vpn dialer used %d times, want 1", got)
+	}
+	if got := lab.calls.Load(); got != 1 {
+		t.Fatalf("lab vpn dialer used %d times, want 1", got)
+	}
+}
+
+func TestFortiVPNReverseRouteUsesVPNDialer(t *testing.T) {
+	targetAddr, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	serverPort := freePort(t)
+	remotePort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startQuicServer(t, ctx, serverPort, "test-secret")
+	time.Sleep(100 * time.Millisecond)
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, nil, []config.ReverseRouteConfig{{
+		RemotePort: remotePort,
+		Target:     targetAddr,
+		Protocol:   "tcp",
+		FortiVPN:   "office",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &countingDialer{}
+	client.SetVPNDialers(map[string]tunnel.DialFunc{"office": dialer.DialContext})
+	go func() {
+		_ = client.Start(ctx)
+	}()
+
+	expectTCPEcho(t, fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if got := dialer.calls.Load(); got != 1 {
+		t.Fatalf("vpn dialer used %d times, want 1", got)
+	}
+}
+
+func TestDialTunnelWithoutRoutes(t *testing.T) {
+	targetAddr, stopTarget := startTCPEchoTarget(t)
+	defer stopTarget()
+
+	serverPort := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startQuicServer(t, ctx, serverPort, "test-secret")
+	time.Sleep(100 * time.Millisecond)
+
+	client, err := receiver.NewQuicReceiver(config.ClientConfig{
+		ServerAddr:           fmt.Sprintf("127.0.0.1:%d", serverPort),
+		SecretKey:            "test-secret",
+		ReconnectIntervalSec: 1,
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer dialCancel()
+	conn, err := client.DialTunnel(dialCtx, "tcp", targetAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got := make([]byte, len("echo:ping"))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "echo:ping" {
+		t.Fatalf("unexpected reply %q", got)
+	}
 }

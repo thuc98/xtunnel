@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xtunnel</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --text: #1d2129; --muted: #667085; --line: #e3e6eb;
+  --accent: #2463eb; --accent-text: #ffffff; --ok: #16803c; --warn: #b45309; --bad: #c62828;
+  --ok-bg: #e7f6ec; --warn-bg: #fdf3e2; --bad-bg: #fdeaea; --input: #ffffff; --code: #f0f2f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --panel: #1a1d23; --text: #e6e8eb; --muted: #98a1ae; --line: #2c3139;
+    --accent: #5b8cff; --accent-text: #0b0d10; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --ok-bg: #16301f; --warn-bg: #33270f; --bad-bg: #3a1718; --input: #14171c; --code: #14171c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+header .meta { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.active { background: var(--bg); color: var(--text); font-weight: 600; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 96px; }
+section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+section.panel h2 { font-size: 15px; margin: 0 0 4px; }
+section.panel h2 { margin-bottom: 12px; }
+.prompt { color: var(--muted); margin: 6px 0 10px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 6px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+input[type=checkbox] { width: auto; }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; min-height: 60vh; resize: vertical; background: var(--code); }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn.icon { padding: 4px 8px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.field.check label { display: flex; gap: 6px; align-items: center; font-size: 14px; color: var(--text); margin-top: 22px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.up { color: var(--ok); background: var(--ok-bg); }
+.chip.connecting { color: var(--warn); background: var(--warn-bg); }
+.chip.down { color: var(--bad); background: var(--bad-bg); }
+.chip.disabled { color: var(--muted); background: var(--bg); }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 13px; color: var(--muted); }
+.switch input { appearance: none; width: 34px; height: 20px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; border: 0; padding: 0; margin: 0; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+.switch input:checked { background: var(--ok); }
+.switch input:checked::after { left: 16px; }
+.switch input:disabled { opacity: .5; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card h3 { margin: 0 0 6px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.kv { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.kv b { color: var(--text); font-weight: 500; }
+.otp { border: 2px solid var(--warn); background: var(--warn-bg); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.otp input { font-size: 20px; letter-spacing: 3px; max-width: 220px; }
+.vpn-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.vpn-card .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.vpn-card .sub { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; font-weight: 600; }
+.savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 10px 16px; display: none; z-index: 6; }
+.savebar.show { display: block; }
+.savebar .inner { max-width: 1100px; margin: 0 auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.savebar .msg { margin-right: auto; }
+.banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; white-space: pre-wrap; }
+.banner.err { background: var(--bad-bg); color: var(--bad); }
+.banner.ok { background: var(--ok-bg); color: var(--ok); }
+.empty { color: var(--muted); padding: 10px 6px; }
+.scroll { overflow-x: auto; }
+.scroll table { min-width: 620px; }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+@media (max-width: 640px) { header { padding: 10px 16px; } nav { margin-left: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>xtunnel</h1>
+  <span class="meta" id="meta"></span>
+  <nav id="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="routes">Routes</button>
+    <button data-tab="reverse">Reverse routes</button>
+    <button data-tab="tunnels">Tunnels</button>
+    <button data-tab="vpns">VPNs</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="yaml">YAML</button>
+    <button id="logout" hidden>Log out</button>
+  </nav>
+</header>
+<main>
+  <div id="banner"></div>
+  <div id="view"></div>
+</main>
+<div class="savebar" id="savebar">
+  <div class="inner">
+    <span class="msg" id="savebar-msg">Draft not applied</span>
+    <button class="btn" id="discard">Discard draft</button>
+    <button class="btn primary" id="save">Apply</button>
+  </div>
+</div>
+<script>
+"use strict";
+const S = { cfg: null, base: "", yaml: "", mask: "", status: null, dirty: false, tab: "overview", pendingIds: "" };
+const DRAFT_KEY = "xtunnel-draft";
+
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const $ = (sel) => document.querySelector(sel);
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  if (res.status === 401) { location.href = "/login"; throw new Error("login required"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function banner(kind, text) {
+  $("#banner").innerHTML = text ? `<div class="banner ${kind}">${esc(text)}</div>` : "";
+  if (kind === "ok") setTimeout(() => { if ($("#banner").textContent === text) banner(); }, 4000);
+}
+
+function normalize(cfg) {
+  cfg.routes ||= []; cfg.reverse_routes ||= []; cfg.fortivpns ||= [];
+  cfg.tunnels ||= []; cfg.server ||= {}; cfg.web ||= {}; cfg.otp ||= {}; cfg.otp.telegram ||= {};
+  for (const v of [...cfg.fortivpns, ...cfg.tunnels]) v.socks5 ||= {};
+  return cfg;
+}
+
+async function loadConfig(discardDraft = false) {
+  const data = await api("GET", "/api/config");
+  S.base = JSON.stringify(normalize(data.config || {}));
+  S.cfg = JSON.parse(S.base);
+  S.yaml = data.yaml || "";
+  S.mask = data.secret_mask;
+  if (discardDraft) dropDraft();
+  const draft = readDraft();
+  if (draft) {
+    S.cfg = normalize(draft.cfg);
+    if (draft.base !== S.base) banner("err", "The config was changed elsewhere since this draft was made. Applying the draft overwrites those changes; discard it to start from the current config.");
+  }
+  updateDraft();
+  if (data.error) banner("err", "Config file: " + data.error);
+}
+
+function readDraft() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch { return null; }
+}
+function dropDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch {}
+}
+
+const SECTIONS = { routes: "Routes", reverse_routes: "Reverse routes", tunnels: "Tunnels", fortivpns: "VPNs", server: "Server", web: "Web", otp: "OTP" };
+
+function updateDraft() {
+  const base = JSON.parse(S.base);
+  const changed = Object.keys(SECTIONS).filter((k) => JSON.stringify(base[k]) !== JSON.stringify(S.cfg[k]));
+  S.dirty = changed.length > 0;
+  try {
+    if (S.dirty) localStorage.setItem(DRAFT_KEY, JSON.stringify({ base: S.base, cfg: S.cfg }));
+    else localStorage.removeItem(DRAFT_KEY);
+  } catch {}
+  $("#savebar").classList.toggle("show", S.dirty);
+  $("#savebar-msg").textContent = `Draft not applied yet: ${changed.map((k) => SECTIONS[k]).join(", ")}`;
+}
+const setDirty = () => updateDraft();
+
+function getPath(obj, path) { return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj); }
+function setPath(obj, path, value) {
+  const keys = path.split(".");
+  const last = keys.pop();
+  const target = keys.reduce((o, k) => (o[k] ??= {}), obj);
+  target[last] = value;
+}
+function readInput(el) {
+  switch (el.dataset.type) {
+    case "int": return el.value === "" ? 0 : parseInt(el.value, 10) || 0;
+    case "bool": return el.checked;
+    default: return el.value;
+  }
+}
+
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.path) return;
+  const path = el.dataset.path;
+  const old = getPath(S.cfg, path);
+  const value = readInput(el);
+  setPath(S.cfg, path, value);
+  const m = path.match(/^(fortivpns|tunnels)\.(\d+)\.name$/);
+  if (m && old) {
+    const key = m[1] === "fortivpns" ? "fortivpn" : "tunnel";
+    for (const r of [...S.cfg.routes, ...S.cfg.reverse_routes]) if (r[key] === old) r[key] = value;
+  }
+  setDirty(true);
+});
+
+function field(label, path, opts = {}) {
+  const v = getPath(S.cfg, path);
+  const type = opts.type || "str";
+  if (type === "bool") {
+    return `<div class="field check"><label><input type="checkbox" data-path="${path}" data-type="bool" ${v ? "checked" : ""}> ${esc(label)}</label></div>`;
+  }
+  const inputType = opts.secret ? "password" : type === "int" ? "number" : "text";
+  const val = type === "int" && !v ? "" : v ?? "";
+  return `<div class="field"><label>${esc(label)}</label><input type="${inputType}" data-path="${path}" data-type="${type}" value="${esc(val)}" placeholder="${esc(opts.placeholder || "")}" ${opts.secret ? 'autocomplete="new-password"' : ""}></div>`;
+}
+
+function vpnSelect(path, emptyLabel) {
+  const v = getPath(S.cfg, path) || "";
+  const names = S.cfg.fortivpns.map((x) => x.name).filter(Boolean);
+  const opts = [`<option value="">${esc(emptyLabel)}</option>`]
+    .concat(names.map((n) => `<option value="${esc(n)}" ${n === v ? "selected" : ""}>VPN: ${esc(n)}</option>`));
+  if (v && !names.includes(v)) opts.push(`<option value="${esc(v)}" selected>VPN: ${esc(v)} (missing)</option>`);
+  return `<select data-path="${path}">${opts.join("")}</select>`;
+}
+
+function tunnelSelect(path) {
+  const v = getPath(S.cfg, path) || "";
+  const names = S.cfg.tunnels.map((x) => x.name).filter(Boolean);
+  const opts = [`<option value="">${names.length === 1 ? "Tunnel: " + esc(names[0]) + " (only one)" : "Choose a tunnel"}</option>`]
+    .concat(names.map((n) => `<option value="${esc(n)}" ${n === v ? "selected" : ""}>Tunnel: ${esc(n)}</option>`));
+  if (v && !names.includes(v)) opts.push(`<option value="${esc(v)}" selected>Tunnel: ${esc(v)} (missing)</option>`);
+  return `<select data-path="${path}">${opts.join("")}</select>`;
+}
+
+function viaSelect(i) {
+  const r = S.cfg.routes[i];
+  const cur = r.fortivpn ? "vpn:" + r.fortivpn : "tunnel:" + (r.tunnel || "");
+  const tunnels = S.cfg.tunnels.map((x) => x.name).filter(Boolean);
+  const vpns = S.cfg.fortivpns.map((x) => x.name).filter(Boolean);
+  const opt = (value, label) => `<option value="${esc(value)}" ${value === cur ? "selected" : ""}>${esc(label)}</option>`;
+  const opts = [opt("tunnel:", tunnels.length === 1 ? `Tunnel: ${tunnels[0]} (only one)` : "Choose…")]
+    .concat(tunnels.map((n) => opt("tunnel:" + n, "Tunnel: " + n)), vpns.map((n) => opt("vpn:" + n, "VPN: " + n)));
+  return `<select data-via="${i}">${opts.join("")}</select>`;
+}
+
+function protoSelect(path) {
+  const v = getPath(S.cfg, path) || "tcp";
+  return `<select data-path="${path}">${["tcp", "udp"].map((p) => `<option ${p === v ? "selected" : ""}>${p}</option>`).join("")}</select>`;
+}
+
+function statusChip(state) { return `<span class="chip ${esc(state)}">${esc(state)}</span>`; }
+
+function onSwitch(list, name) {
+  const v = S.cfg[list].find((x) => x.name === name);
+  if (!v) return "";
+  const on = !v.disabled;
+  const applied = JSON.parse(S.base)[list].find((x) => x.name === name);
+  const pending = !applied || !!applied.disabled !== !!v.disabled;
+  return `<label class="switch" title="Turn it on or off (takes effect on Apply)"><input type="checkbox" data-toggle="${list}:${esc(name)}" ${on ? "checked" : ""}> ${on ? "On" : "Off"}${pending ? " (not applied)" : ""}</label>`;
+}
+
+document.addEventListener("change", (e) => {
+  const ds = e.target.dataset || {};
+  if (ds.toggle) {
+    const [list, ...rest] = ds.toggle.split(":");
+    const v = S.cfg[list].find((x) => x.name === rest.join(":"));
+    if (v) v.disabled = !e.target.checked;
+  } else if (ds.socks) {
+    const sc = getPath(S.cfg, ds.socks + ".socks5") || {};
+    if (e.target.checked && !sc.listen) sc.listen = nextSocksPort();
+    sc.disabled = !e.target.checked;
+    setPath(S.cfg, ds.socks + ".socks5", sc);
+  } else if (ds.via !== undefined) {
+    const r = S.cfg.routes[Number(ds.via)];
+    const [kind, ...rest] = e.target.value.split(":");
+    r.tunnel = kind === "tunnel" ? rest.join(":") : "";
+    r.fortivpn = kind === "vpn" ? rest.join(":") : "";
+  } else {
+    return;
+  }
+  updateDraft();
+  render();
+});
+
+function socksSection(p) {
+  const sc = getPath(S.cfg, p + ".socks5") || {};
+  const on = !!sc.listen && !sc.disabled;
+  const fields = on ? `
+      <div class="grid">
+        ${field("Listen", p + ".socks5.listen", { placeholder: "e.g. :1080" })}
+        ${field("Username", p + ".socks5.username", { placeholder: "optional" })}
+        ${field("Password", p + ".socks5.password", { secret: true, placeholder: "optional" })}
+      </div>` : "";
+  return `
+      <div class="row" style="justify-content:space-between;margin:14px 0 6px">
+        <div class="sub" style="margin:0">SOCKS5 proxy</div>
+        <label class="switch"><input type="checkbox" data-socks="${p}" ${on ? "checked" : ""}> ${on ? "On" : "Off"}</label>
+      </div>${fields}`;
+}
+
+function nextSocksPort() {
+  const used = new Set([...S.cfg.fortivpns, ...S.cfg.tunnels].map((x) => x.socks5 && x.socks5.listen).filter(Boolean));
+  for (let port = 1080; ; port++) if (!used.has(":" + port)) return ":" + port;
+}
+
+function renderOverview() {
+  return `
+  <div id="pending"></div>
+  <section class="panel">
+    <h2>Tunnels</h2>
+    <div id="tunnel-status" class="cards"></div>
+    <div id="errors"></div>
+  </section>
+  <section class="panel">
+    <h2>VPNs</h2>
+    <div id="vpn-status" class="cards"></div>
+  </section>
+  <section class="panel">
+    <h2>Routes</h2>
+    <div class="scroll">${routesSummary()}</div>
+  </section>`;
+}
+
+function routesSummary() {
+  const rows = [];
+  const only = S.cfg.tunnels.length === 1 ? S.cfg.tunnels[0].name : "";
+  const tun = (name) => "tunnel " + esc(name || only || "?");
+  for (const r of S.cfg.routes) rows.push(`<tr><td>route</td><td><code>localhost:${esc(r.local_port)}</code> ${esc(r.protocol)}</td><td>${r.fortivpn ? "VPN " + esc(r.fortivpn) : tun(r.tunnel)}</td><td><code>${esc(r.target)}</code></td></tr>`);
+  for (const r of S.cfg.reverse_routes) rows.push(`<tr><td>reverse</td><td><code>server:${esc(r.remote_port)}</code> ${esc(r.protocol)}</td><td>${tun(r.tunnel)} → client${r.fortivpn ? " → VPN " + esc(r.fortivpn) : ""}</td><td><code>${esc(r.target)}</code></td></tr>`);
+  if (!rows.length) return `<div class="empty">No routes yet.</div>`;
+  return `<table><thead><tr><th>Type</th><th>Listen</th><th>Through</th><th>Target</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function updateOverview() {
+  const st = S.status;
+  if (!st || S.tab !== "overview" || !$("#tunnel-status")) return;
+  if (st.mode === "server") {
+    $("#tunnel-status").innerHTML = `<div class="kv">Server listening on <b>${esc(st.listen)}</b></div>`;
+  } else {
+    $("#tunnel-status").innerHTML = st.tunnels.length ? st.tunnels.map((t) => `
+      <div class="card">
+        <h3><span class="row">${esc(t.name)} ${statusChip(t.state)}</span> ${onSwitch("tunnels", t.name)}</h3>
+        <div class="kv">Server <b>${esc(t.server)}</b></div>
+        ${t.socks5 ? `<div class="kv">SOCKS5 <b>${esc(t.socks5)}</b></div>` : ""}
+        ${t.error ? `<div class="kv" style="color:var(--bad)">${esc(t.error)}</div>` : ""}
+      </div>`).join("") : `<div class="empty">No tunnel configured.</div>`;
+  }
+  $("#errors").innerHTML = (st.errors || []).map((e) => `<div class="banner err" style="margin:10px 0 0">${esc(e)}</div>`).join("");
+
+  $("#vpn-status").innerHTML = st.vpns.length ? st.vpns.map((v) => `
+    <div class="card">
+      <h3><span class="row">${esc(v.name)} ${statusChip(v.state)}</span> ${onSwitch("fortivpns", v.name)}</h3>
+      <div class="kv">Gateway <b>${esc(v.gateway)}</b></div>
+      ${v.address ? `<div class="kv">Address <b>${esc(v.address)}</b></div>` : ""}
+      ${v.dns && v.dns.length ? `<div class="kv">DNS <b>${esc(v.dns.join(", "))}</b></div>` : ""}
+      ${v.socks5 ? `<div class="kv">SOCKS5 <b>${esc(v.socks5)}</b></div>` : ""}
+      ${v.error ? `<div class="kv" style="color:var(--bad)">${esc(v.error)}</div>` : ""}
+      <div class="kv">Since ${esc(new Date(v.since).toLocaleTimeString())}</div>
+    </div>`).join("") : `<div class="empty">No VPN configured.</div>`;
+
+  renderPending();
+}
+
+function renderPending() {
+  const box = $("#pending");
+  if (!box) return;
+  const pending = S.status.pending || [];
+  const ids = pending.map((p) => p.id).join(",");
+  if (ids !== S.pendingIds) {
+    S.pendingIds = ids;
+    box.innerHTML = pending.map((p) => `
+      <div class="otp" data-otp="${esc(p.id)}">
+        <div class="row" style="justify-content:space-between">
+          <strong>VPN ${esc(p.vpn)} needs a one-time code</strong>
+          <span class="kv" data-expires="${esc(p.expires)}"></span>
+        </div>
+        <p class="prompt">${esc(p.prompt)}</p>
+        <form class="row" data-otp-form="${esc(p.id)}">
+          <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code" required>
+          <button class="btn primary">Confirm</button>
+        </form>
+      </div>`).join("");
+    const first = box.querySelector("input");
+    if (first) first.focus();
+  }
+  for (const el of box.querySelectorAll("[data-expires]")) {
+    const left = Math.max(0, Math.round((new Date(el.dataset.expires) - Date.now()) / 1000));
+    el.textContent = `expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  }
+}
+
+document.addEventListener("submit", async (e) => {
+  const id = e.target.dataset.otpForm;
+  if (!id) return;
+  e.preventDefault();
+  const code = e.target.code.value.trim();
+  try {
+    await api("POST", `/api/otp/${encodeURIComponent(id)}`, { code });
+    banner("ok", "Code sent.");
+    await pollStatus();
+  } catch (err) { banner("err", err.message); }
+});
+
+function renderRoutes() {
+  const rows = S.cfg.routes.map((r, i) => `
+    <tr>
+      <td style="width:110px"><input type="number" data-path="routes.${i}.local_port" data-type="int" value="${esc(r.local_port || "")}"></td>
+      <td style="width:90px">${protoSelect(`routes.${i}.protocol`)}</td>
+      <td><input data-path="routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
+      <td style="width:220px">${viaSelect(i)}</td>
+      <td style="width:44px"><button class="btn icon danger" data-del="routes.${i}" title="Delete">✕</button></td>
+    </tr>`).join("");
+  return `
+  <section class="panel">
+    <h2>Routes</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Local port</th><th>Protocol</th><th>Target</th><th>Through</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5" class="empty">No routes.</td></tr>`}</tbody>
+    </table></div>
+    <div class="row" style="margin-top:10px"><button class="btn" data-add="routes">+ Add route</button></div>
+  </section>`;
+}
+
+function renderReverse() {
+  const rows = S.cfg.reverse_routes.map((r, i) => `
+    <tr>
+      <td style="width:110px"><input type="number" data-path="reverse_routes.${i}.remote_port" data-type="int" value="${esc(r.remote_port || "")}"></td>
+      <td style="width:90px">${protoSelect(`reverse_routes.${i}.protocol`)}</td>
+      <td><input data-path="reverse_routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
+      <td style="width:200px">${tunnelSelect(`reverse_routes.${i}.tunnel`)}</td>
+      <td style="width:200px">${vpnSelect(`reverse_routes.${i}.fortivpn`, "Direct from this machine")}</td>
+      <td style="width:44px"><button class="btn icon danger" data-del="reverse_routes.${i}" title="Delete">✕</button></td>
+    </tr>`).join("");
+  return `
+  <section class="panel">
+    <h2>Reverse routes</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Server port</th><th>Protocol</th><th>Target</th><th>Server (tunnel)</th><th>Target through</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" class="empty">No reverse routes.</td></tr>`}</tbody>
+    </table></div>
+    <div class="row" style="margin-top:10px"><button class="btn" data-add="reverse_routes">+ Add reverse route</button></div>
+  </section>`;
+}
+
+function renderVPNs() {
+  const cards = S.cfg.fortivpns.map((v, i) => {
+    const p = `fortivpns.${i}`;
+    return `
+    <div class="vpn-card">
+      <div class="head">
+        <div class="row"><strong>${esc(v.name || "New VPN")}</strong> <span data-vpn-chip="${esc(v.name)}"></span></div>
+        <div class="row">${onSwitch("fortivpns", v.name)}<button class="btn danger" data-del="fortivpns.${i}">Delete</button></div>
+      </div>
+      <div class="grid">
+        ${field("Name", p + ".name")}
+        ${field("Gateway host", p + ".host")}
+        ${field("Port", p + ".port", { type: "int", placeholder: "443" })}
+        ${field("Username", p + ".username")}
+        ${field("Password", p + ".password", { secret: true })}
+        ${field("Realm", p + ".realm")}
+        ${field("Trusted cert (SHA256)", p + ".trusted_cert")}
+        ${field("Reconnect interval (s)", p + ".reconnect_interval_sec", { type: "int", placeholder: "5" })}
+        ${field("Accept any certificate", p + ".insecure_skip_verify", { type: "bool" })}
+      </div>
+      ${socksSection(p)}
+    </div>`;
+  }).join("");
+  return `
+  <section class="panel">
+    <h2>FortiGate VPNs</h2>
+    ${cards || `<div class="empty">No VPNs.</div>`}
+    <button class="btn" data-add="fortivpns">+ Add VPN</button>
+  </section>`;
+}
+
+function updateVPNChips() {
+  if (!S.status) return;
+  for (const el of document.querySelectorAll("[data-vpn-chip]")) {
+    const v = S.status.vpns.find((x) => x.name === el.dataset.vpnChip);
+    el.innerHTML = v ? statusChip(v.state) + (v.address ? ` <span class="kv">${esc(v.address)}</span>` : "") : "";
+  }
+  for (const el of document.querySelectorAll("[data-tunnel-chip]")) {
+    const t = (S.status.tunnels || []).find((x) => x.name === el.dataset.tunnelChip);
+    el.innerHTML = t ? statusChip(t.state) : "";
+  }
+}
+
+function renderTunnels() {
+  const cards = S.cfg.tunnels.map((t, i) => {
+    const p = `tunnels.${i}`;
+    return `
+    <div class="vpn-card">
+      <div class="head">
+        <div class="row"><strong>${esc(t.name || "New tunnel")}</strong> <span data-tunnel-chip="${esc(t.name)}"></span></div>
+        <div class="row">${onSwitch("tunnels", t.name)}<button class="btn danger" data-del="tunnels.${i}">Delete</button></div>
+      </div>
+      <div class="grid">
+        ${field("Name", p + ".name")}
+        ${field("Server address", p + ".server_addr", { placeholder: "host:port" })}
+        ${field("Secret key", p + ".secret_key", { secret: true })}
+        ${field("Keep-alive (s)", p + ".keep_alive_interval_sec", { type: "int", placeholder: "10" })}
+        ${field("Max idle (s)", p + ".max_idle_timeout_sec", { type: "int", placeholder: "60" })}
+        ${field("Reconnect interval (s)", p + ".reconnect_interval_sec", { type: "int", placeholder: "2" })}
+      </div>
+      ${socksSection(p)}
+    </div>`;
+  }).join("");
+  return `
+  <section class="panel">
+    <h2>QUIC tunnels</h2>
+    ${cards || `<div class="empty">No tunnels.</div>`}
+    <button class="btn" data-add="tunnels">+ Add tunnel</button>
+  </section>`;
+}
+
+function renderSettings() {
+  return `
+  <section class="panel">
+    <h2>Server</h2>
+    <div class="grid">
+      ${field("Listen", "server.listen", { placeholder: ":8443" })}
+      ${field("Secret key", "server.secret_key", { secret: true })}
+      ${field("Keep-alive (s)", "server.keep_alive_interval_sec", { type: "int", placeholder: "10" })}
+      ${field("Max idle (s)", "server.max_idle_timeout_sec", { type: "int", placeholder: "60" })}
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Web dashboard</h2>
+    <div class="grid">
+      ${field("Listen", "web.listen", { placeholder: ":18099" })}
+      ${field("Public URL (for OTP links)", "web.public_url", { placeholder: "http://localhost:18099" })}
+      ${field("Admin password", "web.password", { secret: true, placeholder: "empty = no login" })}
+    </div>
+  </section>
+  <section class="panel">
+    <h2>OTP</h2>
+    <div class="grid">
+      ${field("Wait for a code (s)", "otp.timeout_sec", { type: "int", placeholder: "600" })}
+      ${field("Telegram bot", "otp.telegram.enabled", { type: "bool" })}
+      ${field("Bot token", "otp.telegram.bot_token", { secret: true })}
+      ${field("Chat id", "otp.telegram.chat_id", { type: "int", placeholder: "auto: send /start to the bot" })}
+      ${field("Chat id file", "otp.telegram.chat_id_file", { placeholder: "telegram_chat_id" })}
+    </div>
+  </section>`;
+}
+
+function renderYAML() {
+  return `
+  <section class="panel">
+    <h2>Config file</h2>
+    <textarea id="yaml" spellcheck="false">${esc(S.yaml)}</textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="save-yaml">Apply YAML</button>
+      <button class="btn" id="reload-yaml">Reload from file</button>
+    </div>
+  </section>`;
+}
+
+const views = { overview: renderOverview, routes: renderRoutes, reverse: renderReverse, tunnels: renderTunnels, vpns: renderVPNs, settings: renderSettings, yaml: renderYAML };
+
+function render() {
+  if (!S.cfg) return;
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("active", b.dataset.tab === S.tab);
+  S.pendingIds = "";
+  $("#view").innerHTML = views[S.tab]();
+  updateOverview();
+  updateVPNChips();
+}
+
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.tab) {
+
+    S.tab = t.dataset.tab; render(); return;
+  }
+  if (t.dataset.add) {
+    const list = S.cfg[t.dataset.add];
+    if (t.dataset.add === "routes") list.push({ local_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "" });
+    if (t.dataset.add === "reverse_routes") list.push({ remote_port: 0, protocol: "tcp", target: "", tunnel: "", fortivpn: "" });
+    if (t.dataset.add === "tunnels") list.push({ name: "tunnel" + (list.length + 1), server_addr: "", secret_key: "", socks5: {} });
+    if (t.dataset.add === "fortivpns") list.push({ name: "vpn" + (list.length + 1), host: "", port: 443, username: "", password: "", socks5: {} });
+    setDirty(true); render(); return;
+  }
+  if (t.dataset.del) {
+    const [listName, idx] = t.dataset.del.split(".");
+    const list = S.cfg[listName];
+    if (listName === "fortivpns" || listName === "tunnels") {
+      const name = list[idx].name;
+      const key = listName === "fortivpns" ? "fortivpn" : "tunnel";
+      const used = [...S.cfg.routes, ...S.cfg.reverse_routes].some((r) => r[key] === name);
+      if (used && !confirm(`Routes use "${name}". Delete it anyway? Those routes must be changed before Apply works.`)) return;
+    }
+    list.splice(Number(idx), 1);
+    setDirty(true); render(); return;
+  }
+  if (t.id === "logout") { await api("POST", "/api/logout", {}).catch(() => {}); location.href = "/login"; return; }
+  if (t.id === "save") return saveForms();
+  if (t.id === "discard") { await loadConfig(true); banner(); render(); return; }
+  if (t.id === "save-yaml") return saveYAML();
+  if (t.id === "reload-yaml") { await loadConfig(); render(); return; }
+});
+
+async function saveForms() {
+  $("#save").disabled = true;
+  try {
+    await api("PUT", "/api/config", S.cfg);
+    banner("ok", "Applied. Only the changed parts restart.");
+    await loadConfig(true);
+    render();
+    setTimeout(pollStatus, 800);
+  } catch (err) {
+    banner("err", err.message);
+  } finally { $("#save").disabled = false; }
+}
+
+async function saveYAML() {
+  if (S.dirty && !confirm("Applying the file discards the draft made in the other tabs. Continue?")) return;
+  try {
+    await api("PUT", "/api/config/yaml", { yaml: $("#yaml").value });
+    banner("ok", "Applied. Only the changed parts restart.");
+    await loadConfig(true);
+    render();
+    setTimeout(pollStatus, 800);
+  } catch (err) { banner("err", err.message); }
+}
+
+async function pollStatus() {
+  try {
+    S.status = await api("GET", "/api/status");
+    const st = S.status;
+    $("#meta").textContent = `${st.mode} · ${st.config_path}${st.writable ? "" : " (read-only: saving will fail)"}`;
+    $("#logout").hidden = !st.auth;
+    updateOverview();
+    updateVPNChips();
+  } catch (err) {
+    $("#meta").textContent = "disconnected: " + err.message;
+  }
+}
+
+
+(async () => {
+  try { await loadConfig(); } catch (err) { banner("err", err.message); return; }
+  render();
+  await pollStatus();
+  setInterval(pollStatus, 2000);
+})();
+</script>
+</body>
+</html>
