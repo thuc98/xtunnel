@@ -444,6 +444,7 @@ function renderRoutes() {
       <td style="width:90px">${protoSelect(`routes.${i}.protocol`)}</td>
       <td><input data-path="routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
       <td style="width:220px">${viaSelect(i)}</td>
+      <td style="width:110px"><input type="number" min="0" data-path="routes.${i}.udp_idle_timeout_sec" data-type="int" value="${esc(r.udp_idle_timeout_sec || "")}" placeholder="${r.protocol === "udp" ? "60" : "—"}" title="UDP only: close the flow after this many idle seconds (default 60)"></td>
       <td><input data-path="routes.${i}.note" value="${esc(r.note)}" placeholder="What is it?"></td>
       <td style="width:44px"><button class="btn icon danger" data-del="routes.${i}" title="Delete">✕</button></td>
     </tr>`).join("");
@@ -451,8 +452,8 @@ function renderRoutes() {
   <section class="panel">
     <h2>Routes</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Local port</th><th>Protocol</th><th>Target</th><th>Through</th><th>Note</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="6" class="empty">No routes.</td></tr>`}</tbody>
+      <thead><tr><th>Local port</th><th>Protocol</th><th>Target</th><th>Through</th><th>UDP idle (s)</th><th>Note</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7" class="empty">No routes.</td></tr>`}</tbody>
     </table></div>
     <div class="row" style="margin-top:10px"><button class="btn" data-add="routes">+ Add route</button></div>
   </section>`;
@@ -466,6 +467,7 @@ function renderReverse() {
       <td><input data-path="reverse_routes.${i}.target" value="${esc(r.target)}" placeholder="host:port"></td>
       <td style="width:200px">${tunnelSelect(`reverse_routes.${i}.tunnel`)}</td>
       <td style="width:200px">${vpnSelect(`reverse_routes.${i}.vpn`, "Direct from this machine")}</td>
+      <td style="width:110px"><input type="number" min="0" data-path="reverse_routes.${i}.udp_idle_timeout_sec" data-type="int" value="${esc(r.udp_idle_timeout_sec || "")}" placeholder="${r.protocol === "udp" ? "60" : "—"}" title="UDP only: close the flow after this many idle seconds (default 60)"></td>
       <td><input data-path="reverse_routes.${i}.note" value="${esc(r.note)}" placeholder="What is it?"></td>
       <td style="width:44px"><button class="btn icon danger" data-del="reverse_routes.${i}" title="Delete">✕</button></td>
     </tr>`).join("");
@@ -473,8 +475,8 @@ function renderReverse() {
   <section class="panel">
     <h2>Reverse routes</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Server port</th><th>Protocol</th><th>Target</th><th>Server (tunnel)</th><th>Target through</th><th>Note</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" class="empty">No reverse routes.</td></tr>`}</tbody>
+      <thead><tr><th>Server port</th><th>Protocol</th><th>Target</th><th>Server (tunnel)</th><th>Target through</th><th>UDP idle (s)</th><th>Note</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="8" class="empty">No reverse routes.</td></tr>`}</tbody>
     </table></div>
     <div class="row" style="margin-top:10px"><button class="btn" data-add="reverse_routes">+ Add reverse route</button></div>
   </section>`;

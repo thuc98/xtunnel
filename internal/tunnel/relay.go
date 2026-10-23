@@ -17,8 +17,15 @@ import (
 const (
 	maxUDPPacketSize      = 64*1024 - 1
 	udpSessionQueueSize   = 256
-	udpSessionIdleTimeout = 2 * time.Minute
+	defaultUDPIdleTimeout = 60 * time.Second
 )
+
+func udpIdleTimeout(sec int) time.Duration {
+	if sec <= 0 {
+		return defaultUDPIdleTimeout
+	}
+	return time.Duration(sec) * time.Second
+}
 
 type openStreamFunc func(context.Context) (net.Conn, error)
 
@@ -53,7 +60,7 @@ func serveTCPListener(ctx context.Context, ln net.Listener, open openStreamFunc,
 	}
 }
 
-func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, target string) error {
+func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, target string, idleTimeout time.Duration) error {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 
@@ -78,7 +85,7 @@ func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, t
 			s = &udpSession{packets: make(chan []byte, udpSessionQueueSize)}
 			sessions[key] = s
 			go func() {
-				s.run(ctx, conn, clientAddr, open, target)
+				s.run(ctx, conn, clientAddr, open, target, idleTimeout)
 				mu.Lock()
 				if sessions[key] == s {
 					delete(sessions, key)
@@ -91,20 +98,16 @@ func serveUDPConn(ctx context.Context, conn *net.UDPConn, open openStreamFunc, t
 		select {
 		case s.packets <- packet:
 		default:
-			// queue full: drop, as UDP would
 		}
 	}
 }
 
-// udpSession carries every datagram from one local client address over a
-// single stream, so the remote side keeps one socket (and source port) for the
-// lifetime of the flow. Protocols like QUIC depend on that.
 type udpSession struct {
 	packets chan []byte
 	idle    idleTracker
 }
 
-func (s *udpSession) run(ctx context.Context, localConn *net.UDPConn, clientAddr *net.UDPAddr, open openStreamFunc, target string) {
+func (s *udpSession) run(ctx context.Context, localConn *net.UDPConn, clientAddr *net.UDPAddr, open openStreamFunc, target string, idleTimeout time.Duration) {
 	streamConn, err := open(ctx)
 	if err != nil {
 		log.Printf("open udp stream for %s: %v", target, err)
@@ -130,7 +133,7 @@ func (s *udpSession) run(ctx context.Context, localConn *net.UDPConn, clientAddr
 		}
 	}()
 
-	ticker := time.NewTicker(udpSessionIdleTimeout / 4)
+	ticker := time.NewTicker(idleTimeout / 4)
 	defer ticker.Stop()
 	for {
 		select {
@@ -145,7 +148,7 @@ func (s *udpSession) run(ctx context.Context, localConn *net.UDPConn, clientAddr
 				return
 			}
 		case <-ticker.C:
-			if s.idle.expired(udpSessionIdleTimeout) {
+			if s.idle.expired(idleTimeout) {
 				return
 			}
 		}
@@ -167,7 +170,7 @@ func relayTCP(dial DialFunc, target string, streamReader io.Reader, streamConn n
 	)
 }
 
-func relayUDP(dial DialFunc, target string, streamReader io.Reader, streamConn net.Conn) {
+func relayUDP(dial DialFunc, target string, streamReader io.Reader, streamConn net.Conn, idleTimeout time.Duration) {
 	targetConn, err := dial(context.Background(), "udp", target)
 	if err != nil {
 		log.Printf("dial udp target %s: %v", target, err)
@@ -210,14 +213,14 @@ func relayUDP(dial DialFunc, target string, streamReader io.Reader, streamConn n
 		}
 	}()
 
-	ticker := time.NewTicker(udpSessionIdleTimeout / 4)
+	ticker := time.NewTicker(idleTimeout / 4)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-done:
 			return
 		case <-ticker.C:
-			if idle.expired(udpSessionIdleTimeout) {
+			if idle.expired(idleTimeout) {
 				return
 			}
 		}
@@ -236,9 +239,6 @@ func (t *idleTracker) expired(timeout time.Duration) bool {
 	return time.Since(time.Unix(0, t.last.Load())) > timeout
 }
 
-// framedPacketConn carries datagrams over a byte stream, each prefixed with a
-// 2-byte big-endian length. Every Read returns exactly one datagram and every
-// Write sends exactly one.
 type framedPacketConn struct {
 	net.Conn
 	reader io.Reader

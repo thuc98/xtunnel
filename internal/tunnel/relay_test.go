@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// A UDP flow must reach the target from one stable source port, and the
-// target must be able to send any number of replies (QUIC needs both).
 func TestUDPSessionKeepsSourcePort(t *testing.T) {
 	target, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -39,7 +37,7 @@ func TestUDPSessionKeepsSourcePort(t *testing.T) {
 		local, remote := net.Pipe()
 		go func() {
 			defer remote.Close()
-			relayUDP(defaultDialer.DialContext, target.LocalAddr().String(), remote, remote)
+			relayUDP(defaultDialer.DialContext, target.LocalAddr().String(), remote, remote, defaultUDPIdleTimeout)
 		}()
 		return newFramedPacketConn(local, local), nil
 	}
@@ -48,7 +46,7 @@ func TestUDPSessionKeepsSourcePort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = serveUDPConn(ctx, listener, open, "test") }()
+	go func() { _ = serveUDPConn(ctx, listener, open, "test", defaultUDPIdleTimeout) }()
 
 	conn, err := net.Dial("udp", listener.LocalAddr().String())
 	if err != nil {
@@ -79,5 +77,73 @@ func TestUDPSessionKeepsSourcePort(t *testing.T) {
 		if src := <-sources; src != first {
 			t.Fatalf("source port changed: %s -> %s", first, src)
 		}
+	}
+}
+
+func TestUDPSessionClosesAfterIdleTimeout(t *testing.T) {
+	target, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+
+	sources := make(chan string, 16)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, addr, err := target.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			sources <- addr.String()
+			_, _ = target.WriteToUDP(buf[:n], addr)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const idle = 400 * time.Millisecond
+	open := func(ctx context.Context) (net.Conn, error) {
+		local, remote := net.Pipe()
+		go func() {
+			defer remote.Close()
+			relayUDP(defaultDialer.DialContext, target.LocalAddr().String(), remote, remote, idle)
+		}()
+		return newFramedPacketConn(local, local), nil
+	}
+
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = serveUDPConn(ctx, listener, open, "test", idle) }()
+
+	conn, err := net.Dial("udp", listener.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	buf := make([]byte, 1024)
+	roundTrip := func() string {
+		t.Helper()
+		if _, err := conn.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := conn.Read(buf); err != nil {
+			t.Fatal(err)
+		}
+		return <-sources
+	}
+
+	first := roundTrip()
+	if again := roundTrip(); again != first {
+		t.Fatalf("source port changed before idle timeout: %s -> %s", first, again)
+	}
+	time.Sleep(3 * idle)
+	if after := roundTrip(); after == first {
+		t.Fatalf("session was not closed after idle timeout (still %s)", after)
 	}
 }

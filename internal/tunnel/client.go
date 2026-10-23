@@ -101,6 +101,8 @@ func (c *Client) openStream(ctx context.Context, route config.RouteConfig) (net.
 		Protocol:  route.Protocol,
 		Target:    route.Target,
 		SecretKey: c.secretKey,
+
+		UDPIdleTimeoutSec: route.UDPIdleTimeoutSec,
 	}
 	if err := WriteStreamRequest(conn, req); err != nil {
 		_ = conn.Close()
@@ -178,7 +180,7 @@ func (c *Client) listenUDP(ctx context.Context, route config.RouteConfig) error 
 	defer conn.Close()
 	log.Printf("udp route :%d -> %s%s", route.LocalPort, route.Target, via)
 
-	return serveUDPConn(ctx, conn, open, route.Target)
+	return serveUDPConn(ctx, conn, open, route.Target, udpIdleTimeout(route.UDPIdleTimeoutSec))
 }
 
 func (c *Client) ServeReverse(ctx context.Context, conn StreamConn, retryInterval time.Duration) error {
@@ -239,6 +241,8 @@ func (c *Client) bind(ctx context.Context, conn StreamConn, route config.Reverse
 		Protocol:  route.Protocol,
 		Port:      route.RemotePort,
 		SecretKey: c.secretKey,
+
+		UDPIdleTimeoutSec: route.UDPIdleTimeoutSec,
 	}
 	if err := WriteStreamRequest(streamConn, req); err != nil {
 		return err
@@ -293,6 +297,6 @@ func (c *Client) handleReverseStream(streamConn net.Conn) {
 	case ProtocolTCP:
 		relayTCP(dial, route.Target, reader, streamConn)
 	case ProtocolUDP:
-		relayUDP(dial, route.Target, reader, streamConn)
+		relayUDP(dial, route.Target, reader, streamConn, udpIdleTimeout(route.UDPIdleTimeoutSec))
 	}
 }

@@ -24,6 +24,8 @@ type StreamRequest struct {
 	Target    string `json:"target,omitempty"`
 	Port      int    `json:"port,omitempty"`
 	SecretKey string `json:"secret_key"`
+
+	UDPIdleTimeoutSec int `json:"udp_idle_timeout_sec,omitempty"`
 }
 
 type BindResponse struct {

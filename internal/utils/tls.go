@@ -50,7 +50,8 @@ func ClientTLSConfig() *tls.Config {
 
 func QUICConfig(keepAliveIntervalSec, maxIdleTimeoutSec int) *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod: time.Duration(keepAliveIntervalSec) * time.Second,
-		MaxIdleTimeout:  time.Duration(maxIdleTimeoutSec) * time.Second,
+		KeepAlivePeriod:    time.Duration(keepAliveIntervalSec) * time.Second,
+		MaxIdleTimeout:     time.Duration(maxIdleTimeoutSec) * time.Second,
+		MaxIncomingStreams: 10000,
 	}
 }

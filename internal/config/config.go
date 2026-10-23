@@ -67,6 +67,8 @@ type RouteConfig struct {
 
 	VPN string `yaml:"vpn,omitempty" json:"vpn"`
 
+	UDPIdleTimeoutSec int `yaml:"udp_idle_timeout_sec,omitempty" json:"udp_idle_timeout_sec"`
+
 	FortiVPN string `yaml:"fortivpn,omitempty" json:"-"`
 	Note     string `yaml:"note,omitempty" json:"note"`
 }
@@ -79,6 +81,8 @@ type ReverseRouteConfig struct {
 	Tunnel string `yaml:"tunnel,omitempty" json:"tunnel"`
 
 	VPN string `yaml:"vpn,omitempty" json:"vpn"`
+
+	UDPIdleTimeoutSec int `yaml:"udp_idle_timeout_sec,omitempty" json:"udp_idle_timeout_sec"`
 
 	FortiVPN string `yaml:"fortivpn,omitempty" json:"-"`
 	Note     string `yaml:"note,omitempty" json:"note"`
@@ -413,6 +417,9 @@ func (c *Config) Validate() error {
 		if route.Protocol != "tcp" && route.Protocol != "udp" {
 			return fmt.Errorf("routes[%d].protocol must be tcp or udp", i)
 		}
+		if route.UDPIdleTimeoutSec < 0 {
+			return fmt.Errorf("routes[%d].udp_idle_timeout_sec must not be negative", i)
+		}
 		if route.VPN != "" {
 			if !vpns[route.VPN] {
 				return fmt.Errorf("routes[%d].vpn: unknown vpn %q", i, route.VPN)
@@ -440,6 +447,9 @@ func (c *Config) Validate() error {
 		}
 		if route.Protocol != "tcp" && route.Protocol != "udp" {
 			return fmt.Errorf("reverse_routes[%d].protocol must be tcp or udp", i)
+		}
+		if route.UDPIdleTimeoutSec < 0 {
+			return fmt.Errorf("reverse_routes[%d].udp_idle_timeout_sec must not be negative", i)
 		}
 		if route.VPN != "" && !vpns[route.VPN] {
 			return fmt.Errorf("reverse_routes[%d].vpn: unknown vpn %q", i, route.VPN)

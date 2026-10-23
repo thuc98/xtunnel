@@ -69,7 +69,7 @@ func (s *Server) HandleStream(ctx context.Context, conn StreamConn, streamConn n
 	case ProtocolTCP:
 		relayTCP(defaultDialer.DialContext, req.Target, reader, streamConn)
 	case ProtocolUDP:
-		relayUDP(defaultDialer.DialContext, req.Target, reader, streamConn)
+		relayUDP(defaultDialer.DialContext, req.Target, reader, streamConn, udpIdleTimeout(req.UDPIdleTimeoutSec))
 	default:
 		log.Printf("unsupported protocol %q", req.Protocol)
 	}
@@ -118,7 +118,7 @@ func (s *Server) handleBind(ctx context.Context, conn StreamConn, req StreamRequ
 	case net.Listener:
 		err = serveTCPListener(bindCtx, l, open, label)
 	case *net.UDPConn:
-		err = serveUDPConn(bindCtx, l, open, label)
+		err = serveUDPConn(bindCtx, l, open, label, udpIdleTimeout(req.UDPIdleTimeoutSec))
 	}
 	if err != nil && bindCtx.Err() == nil {
 		log.Printf("reverse %s :%d closed: %v", req.Protocol, req.Port, err)
